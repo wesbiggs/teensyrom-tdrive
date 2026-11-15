@@ -102,24 +102,29 @@ edit(f"{C}/Common_Defs.h",
 edit("Source/Teensy/Teensy.ino",
      "   //future use:\n",
      "#ifdef TDrive_Any\n   EEPROM.write(eepAdTDriveDevs, 0);   //TDrive device numbers: 0 = defaults (8/9)\n   EEPROM.write(eepAdTDriveDevs+1, 0);\n#endif\n\n   //future use:\n")
-# The enum and table entries go *before* the Kernal Replace entries, not after: the lines after them (IOH_Debug and the
-# "last manually selectable" comment) are what upstream's open GeoRAM PRs rewrite, and a hunk with those lines as context
-# would not apply on top of them. (Include order is separate and stays after IOH_KernalReplace.c, which IOH_TDrive.c needs.)
+# The TDrive entries go *after* every upstream selectable entry (after IOH_GeoRAM, the last), so upstream's own handlers keep
+# their indices (a stored default Special IO, eepAdNextIOHndlr, still means the same one after flashing this build) and the TDrive
+# ones form a block at the end of the Special IO list. LastSelectableIOH moves to the last TDrive entry. (Include order is separate
+# and stays after IOH_KernalReplace.c, which IOH_TDrive.c needs.)
+TD_ENUM = ("   #ifdef Fab04_TDrive\n      IOH_TDrive,\n      IOH_TDriveSwift,\n   #ifdef Fab04_REU\n      IOH_TDriveSwiftREU,\n      IOH_TDriveREU,\n   #endif\n   #endif  \n"
+           "   #ifdef TDrive_Agent\n      IOH_TDriveAgent,\n   #endif  \n")
 edit(f"{C}/Menu_Regs.h",
-     "   #ifdef Fab04_KernalReplace\n      IOH_KernalReplace,\n   #endif  \n",
-     "   #ifdef Fab04_TDrive\n      IOH_TDrive,\n      IOH_TDriveSwift,\n   #ifdef Fab04_REU\n      IOH_TDriveSwiftREU,\n      IOH_TDriveREU,\n   #endif\n   #endif  \n"
-     "   #ifdef TDrive_Agent\n      IOH_TDriveAgent,\n   #endif  \n"
-     "   #ifdef Fab04_KernalReplace\n      IOH_KernalReplace,\n   #endif  \n")
+     "      IOH_GeoRAM, //last manually selectable, see LastSelectableIOH\n",
+     "      IOH_GeoRAM, //last manually selectable, see LastSelectableIOH\n" + TD_ENUM)
+edit(f"{C}/Menu_Regs.h",
+     "#define LastSelectableIOH  IOH_GeoRAM    //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n",
+     "#define LastSelectableIOH  IOH_GeoRAM    //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n"
+     "#ifdef TDrive_Agent\n   #undef LastSelectableIOH\n   #define LastSelectableIOH  IOH_TDriveAgent   //the TDrive entries follow upstream's; the agent is last on both boards\n#endif\n")
 edit(f"{C}/IOHandlers.h",
      '   #ifdef Fab04_KernalReplace\n      #include "IO_Handlers/IOH_KernalReplace.c"\n   #endif    \n',
      '   #ifdef Fab04_KernalReplace\n      #include "IO_Handlers/IOH_KernalReplace.c"\n   #endif    \n'
      '   #ifdef TDrive_Any\n      #include "IO_Handlers/IOH_TDrive.c"\n   #endif    \n'
      '   #ifdef TDrive_Agent\n      #include "IO_Handlers/IOH_TDriveAgent.c"   //needs IOH_TDrive.c\n   #endif    \n')
 edit(f"{C}/IOHandlers.h",
-     "   #ifdef Fab04_KernalReplace\n      &IOHndlr_KernalReplace,      //IOH_KernalReplace,\n   #endif  \n",
+     "      &IOHndlr_GeoRAM,             //IOH_GeoRAM,\n",
+     "      &IOHndlr_GeoRAM,             //IOH_GeoRAM,\n"
      "   #ifdef Fab04_TDrive\n      &IOHndlr_TDrive,             //IOH_TDrive,\n      &IOHndlr_TDriveSwift,        //IOH_TDriveSwift,\n   #ifdef Fab04_REU\n      &IOHndlr_TDriveSwiftREU,     //IOH_TDriveSwiftREU,\n      &IOHndlr_TDriveREU,          //IOH_TDriveREU,\n   #endif\n   #endif  \n"
-     "   #ifdef TDrive_Agent\n      &IOHndlr_TDriveAgent,        //IOH_TDriveAgent,\n   #endif  \n"
-     "   #ifdef Fab04_KernalReplace\n      &IOHndlr_KernalReplace,      //IOH_KernalReplace,\n   #endif  \n")
+     "   #ifdef TDrive_Agent\n      &IOHndlr_TDriveAgent,        //IOH_TDriveAgent,\n   #endif  \n")
 edit(f"{C}/IOHandlers.h",
      '      #include "IO_Handlers/IOH_Swiftlink.c"\n',
      '      #include "IO_Handlers/IOH_Swiftlink.c"\n'

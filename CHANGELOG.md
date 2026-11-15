@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0.71
+
+### Changed
+- **The TDrive entries now come last in the Special IO list**, after every Special IO of upstream TeensyROM (Swiftlink, the MIDI
+  ones, REU, Kernal Replace, Debug, REU TR Page, GeoRAM): TDrive, TDrive+SwiftLink, TDrive+Swift+REU, TDrive+REU, TDrive Agent.
+  Upstream's own entries keep the positions they have in stock firmware, so a default Special IO chosen under stock firmware
+  means the same one here, and new upstream entries no longer shift the TDrive ones' neighbours. **If your stored default
+  Special IO was a TDrive entry, Kernal Replace or Debug (any earlier TDrive build), it now selects a different entry: choose it
+  again in Settings.** Firmware builds (TR+ with DMA, plain TR); host tests; **not on hardware**.
+
 ## v0.9.0.70
 
 ### Changed

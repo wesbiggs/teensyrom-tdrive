@@ -199,7 +199,7 @@ index 75cea2d..dbf9501 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 2c5d19a..f043898 100644
+index 2c5d19a..1cf8395 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -221,7 +221,7 @@ index 2c5d19a..f043898 100644
  
  
 -#define TRVersion              "0.9"    //*VERSION*
-+#define TRVersion              "0.9.0.70"    //*VERSION*  (stock 0.9 + TDrive rev 70)
++#define TRVersion              "0.9.0.71"    //*VERSION*  (stock 0.9 + TDrive rev 71)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
@@ -245,7 +245,7 @@ index 2c5d19a..f043898 100644
     eepAdUnusedSize    = (4284-eepAdUnused), //Max size = 4284 (emulated in flash)
  };
 diff --git a/Source/Teensy/MinimalBoot/Common/IOHandlers.h b/Source/Teensy/MinimalBoot/Common/IOHandlers.h
-index 5e83b3e..357986e 100644
+index 5e83b3e..f7953d4 100644
 --- a/Source/Teensy/MinimalBoot/Common/IOHandlers.h
 +++ b/Source/Teensy/MinimalBoot/Common/IOHandlers.h
 @@ -119,6 +119,12 @@ struct stcIOHandlers
@@ -275,10 +275,10 @@ index 5e83b3e..357986e 100644
        #include "IO_Handlers/IOH_ASID.c"
  #endif
     #include "IO_Handlers/IOH_None.c"
-@@ -159,6 +172,17 @@ stcIOHandlers* IOHandler[] =  //Synch order/qty with enum enumIOHandlers
-    #ifdef Fab04_REU
-       &IOHndlr_REU,                //IOH_REU,
-    #endif  
+@@ -167,6 +180,17 @@ stcIOHandlers* IOHandler[] =  //Synch order/qty with enum enumIOHandlers
+       &IOHndlr_REU_TRPage,         //IOH_REU_TRPage,
+    #endif
+       &IOHndlr_GeoRAM,             //IOH_GeoRAM,
 +   #ifdef Fab04_TDrive
 +      &IOHndlr_TDrive,             //IOH_TDrive,
 +      &IOHndlr_TDriveSwift,        //IOH_TDriveSwift,
@@ -290,9 +290,9 @@ index 5e83b3e..357986e 100644
 +   #ifdef TDrive_Agent
 +      &IOHndlr_TDriveAgent,        //IOH_TDriveAgent,
 +   #endif  
-    #ifdef Fab04_KernalReplace
-       &IOHndlr_KernalReplace,      //IOH_KernalReplace,
-    #endif  
+       
+    //*not* manually selectable, see LastSelectableIOH
+                                    
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_KernalReplace.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_KernalReplace.c
 index 449bef5..c6f30cb 100644
 --- a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_KernalReplace.c
@@ -2489,13 +2489,13 @@ index 59ce0b0..0ea9c6e 100644
     }
     //else
 diff --git a/Source/Teensy/MinimalBoot/Common/Menu_Regs.h b/Source/Teensy/MinimalBoot/Common/Menu_Regs.h
-index 463190d..436362c 100644
+index 463190d..5b01305 100644
 --- a/Source/Teensy/MinimalBoot/Common/Menu_Regs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Menu_Regs.h
-@@ -443,6 +443,17 @@ enum enumIOHandlers //Synch order/qty with IOHandler[] (IOHandlers.h)
-    #ifdef Fab04_REU
-       IOH_REU,
-    #endif 
+@@ -451,6 +451,17 @@ enum enumIOHandlers //Synch order/qty with IOHandler[] (IOHandlers.h)
+       IOH_REU_TRPage,
+    #endif
+       IOH_GeoRAM, //last manually selectable, see LastSelectableIOH
 +   #ifdef Fab04_TDrive
 +      IOH_TDrive,
 +      IOH_TDriveSwift,
@@ -2507,9 +2507,17 @@ index 463190d..436362c 100644
 +   #ifdef TDrive_Agent
 +      IOH_TDriveAgent,
 +   #endif  
-    #ifdef Fab04_KernalReplace
-       IOH_KernalReplace,
-    #endif  
+ 
+    //*not* manually selectable, see LastSelectableIOH
+       
+@@ -485,3 +496,7 @@ enum enumIOHandlers //Synch order/qty with IOHandler[] (IOHandlers.h)
+ };
+ 
+ #define LastSelectableIOH  IOH_GeoRAM    //127 max.  Used in IOH_TeensyROM.c for Special IO display/select
++#ifdef TDrive_Agent
++   #undef LastSelectableIOH
++   #define LastSelectableIOH  IOH_TDriveAgent   //the TDrive entries follow upstream's; the agent is last on both boards
++#endif
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c
 new file mode 100644
 index 0000000..2fcd71e
