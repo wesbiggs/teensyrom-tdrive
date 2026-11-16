@@ -29,9 +29,9 @@ uint8_t HIRAM_State = 0;
 volatile uint8_t KDS_State = 0;
 bool KDS_Read01Valid = false;
 volatile uint8_t BtnPressed = 0;
-uint8_t KernalFast[8192];                             // the image IOH_KernalReplace.c serves (TDrive_PreStart writes the banner bytes)
+uint8_t KernalBin[8192];                             // the image IOH_KernalReplace.c serves (TDrive_PreStart writes the banner bytes)
 static const int kBannerTag = 0x1BB0;                 // where the tag sits in this fake image (anywhere: the glue searches for it)
-static int banner(int unit) { return KernalFast[kBannerTag + 8 + unit]; }
+static int banner(int unit) { return KernalBin[kBannerTag + 8 + unit]; }
 
 static uint8_t g_c64_kernal[8192];                    // what a DMA read of $E000-$FFFF returns
 static uint8_t g_c64_ram[65536];                      // where DMA writes go (the DMA LOAD, VIO_FLOAD_DMA) and reads below $E000 come from
@@ -292,7 +292,7 @@ int main(int argc, char **argv)
     { FILE *f = fopen(argv[3], "rb"); char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) hello_expect.append(b, n); fclose(f); }
 
     memset(EEPROM.m, 0xFF, sizeof EEPROM.m);               // erased flash: no setting stored yet
-    memcpy(KernalFast + kBannerTag, "VDUNITS:", 8);          // patches/vdbanner.s: the tag, then the two unit bytes (0 as built)
+    memcpy(KernalBin + kBannerTag, "VDUNITS:", 8);          // patches/vdbanner.s: the tag, then the two unit bytes (0 as built)
     prestart();
     check("banner bytes: the menu probe settled both (8, 9)", banner(0) == 8 && banner(1) == 9);
     check("banner registers ($DE3C-$DE3F under the menu's handler): tag, then the settled 8 / 9",
@@ -1279,11 +1279,11 @@ int main(int argc, char **argv)
     // TDrive default runs as the agent; Kernal Replace (upstream drops it itself) and the rest are left alone
     for (uint8_t def : {IOH_TDrive, IOH_TDriveSwift, IOH_TDriveSwiftREU, IOH_TDriveREU, IOH_TDriveAgent}) {
         EEPROM.write(eepAdNextIOHndlr, def); IO1[rwRegNextIOHndlr] = def; vioReady = false;
-        memset(KernalFast, 0x5A, 64);
+        memset(KernalBin, 0x5A, 64);
         bool agent = TDrive_C128Launch();
         char what[120];
         snprintf(what, sizeof what, "C128 launch, default %d: the agent, after the drive's PreStart (no KERNAL banner bytes)", def);
-        check(what, agent && IO1[rwRegNextIOHndlr] == IOH_TDriveAgent && vioReady && KernalFast[0] == 0x5A && IO1[rwRegScratch] == 0);
+        check(what, agent && IO1[rwRegNextIOHndlr] == IOH_TDriveAgent && vioReady && KernalBin[0] == 0x5A && IO1[rwRegScratch] == 0);
     }
     EEPROM.write(eepAdNextIOHndlr, IOH_Other); IO1[rwRegNextIOHndlr] = IOH_Other; vioReady = false;
     check("C128 launch, default not TDrive: untouched, no PreStart (an empty program: upstream's plain reset)",

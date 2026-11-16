@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.0.72
+
+### Changed
+- **Rebased on upstream TeensyROM `7b8ef116`** (main as of 2026-11-16; the fork's `tdrive-base` branch adds the shared disk image engine on
+  top). Upstream's Kernal Replace now serves its image from DTCM itself (TeensyROM PR 101), so TDrive's own `kernalreplace-fixes.patch`
+  is gone. Also inherited: USB transfers no longer hold off the bus interrupt (PR 103: the cause of crashes and late bus answers under USB
+  serial traffic), the USB Mouse Special IO and Minesweeper, C128-mode launches without Kernal Replace (PR 98), and upstream's DMA and
+  REU fixes (PRs 92, 99, 100). **The TDrive Special IOs move down one place** in the list, after upstream's new USB Mouse entry: if your
+  stored default Special IO was a TDrive entry, choose it again in Settings. Firmware builds (TR+); host tests and upstream's tests;
+  **not on hardware**. `docs/DESIGN.md` section 61.
+
+### Build
+- `firmware/kernalreplace-fixes.patch` removed; `tools/make_tr_patch.sh` no longer applies it. The `LATE_ISR_TRACE` debug counters it
+  carried are gone with it.
+
 ## v0.9.0.71
 
 ### Changed

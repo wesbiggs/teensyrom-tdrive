@@ -93,7 +93,7 @@ The Alt button disk switching (`SpecialBtn_TDrive`, `VD_SwitchNext`, `/tdrive-co
 
 Build with `-DVD_TRACE` for a per-command serial trace; it is off by default because the printing makes the bus handler answer late.
 
-Uncomment `#define LATE_ISR_TRACE` in `Common_Defs.h` (after the patch is applied) to count late phi2 interrupts (`ISRs.c`) and print them on the serial console: `LATE-ISR ...` at most every 2 s, and for the first 20 s after each Kernal Replace/TDrive launch a `TRACE +ms ...` line every 250 ms with the counters, the PIT/ENET interrupt state and whether `loop()` polls the Ethernet stack. Off by default: nothing of it is compiled in. `#define KERNAL_NO_DTCM` (`IOH_KernalReplace.c`) serves the image from the malloc'ed `KernalBin` instead of the 8 KB RAM1 copy `KernalFast`.
+The KERNAL image is served from upstream's DTCM `KernalBin` (TeensyROM PR 101). The `LATE_ISR_TRACE` late-interrupt counters and `KERNAL_NO_DTCM` went with `kernalreplace-fixes.patch` in 0.9.0.72 (docs/DESIGN.md 61); teensyrom-snoop's late-interrupt counter measures the same.
 
 ## What is and isn't verified
 Host (`make test`): the D64 / D71 / D81 engine against `c1541` (contents, BAM equality with `c1541 -validate`, formats), the bus scan in VICE with

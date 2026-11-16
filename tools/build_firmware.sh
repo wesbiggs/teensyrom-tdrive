@@ -16,7 +16,7 @@ case "$OUT" in --*) OUT=build/firmware ;; esac
 INSTALL=0; for a in "$@"; do [ "$a" = --install-toolchain ] && INSTALL=1; done
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # firmware/UPSTREAM: the commit, then the repository that has it (default: SensoriumEmbedded's; TDrive builds on the fork's
-# kernalreplace-fixes branch, which carries the shared disk image engine, Source/Teensy/DiskImage, ahead of upstream)
+# tdrive-base branch: upstream main plus the shared disk image engine, Source/Teensy/DiskImage, which upstream does not have yet)
 read -r SHA REPO < "$HERE/firmware/UPSTREAM"
 REPO="${REPO:-https://github.com/SensoriumEmbedded/TeensyROM.git}"
 TR="$HERE/build/teensyrom-$TARGET"

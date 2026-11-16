@@ -42,7 +42,8 @@ Three more findings from that work, useful for the Kernal Replace code in genera
   (sense first, then drive): the real ROM's byte wins, so it is only harmless where the served byte equals the stock ROM's.
 * **Serve the image from DTCM.** `KernalBin` is malloc'ed in cached RAM2; a cold cache line in the ISR costs 100 ns or more. A `uint8_t KernalFast[8192]` copy in
   RAM1 removed one class of wrong first bytes. Later A/B (0.9.0.15, Ethernet fix in): serving straight from `KernalBin` (`KERNAL_NO_DTCM`) kept `VAULTTEST` clean and showed no late-ISR bursts (those
-  count ISR entry, not when the byte reaches the bus), but q4k failed once on a first run and not since: inconclusive, so the copy stays. Putting the copy in the unused ITCM
+  count ISR entry, not when the byte reaches the bus), but q4k failed once on a first run and not since: inconclusive, so the copy stays.
+  **Upstream** since [TeensyROM PR 101](https://github.com/SensoriumEmbedded/TeensyROM/pull/101) (`KernalBin` itself a static DTCM array, `KernalLoaded`); `kernalreplace-fixes.patch`, and with it the `LATE_ISR_TRACE` counters below, dropped in 0.9.0.72. Putting the copy in the unused ITCM
   padding to save the 8 KB of stack does not work: Teensy's `configure_cache()` maps ITCM read-only, so the `memcpy` faults and the board resets.
 * **The Ethernet stack makes phi2 interrupts late.** Once Ethernet is initialized (a cable is not needed), about 39 per second take 1.1-1.5 us longer
   than the ISR can afford. Masking the Ethernet (ENET) interrupt and skipping TCP polling did not remove them; masking the PIT interrupt did.

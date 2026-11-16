@@ -40,8 +40,8 @@ The C64's ability to read the 8 KB of RAM under KERNAL ROM ($E000-$FFFF) is used
 
 ## Installing
 1. Patch the firmware source and build the TR+ target. The patch applies on the commit in [`firmware/UPSTREAM`](firmware/UPSTREAM), the
-   `kernalreplace-fixes` branch of [wesbiggs/TeensyROM](https://github.com/wesbiggs/TeensyROM), which has the D64/D71/D81 engine TDrive
-   shares with GEOS and the menu (`Source/Teensy/DiskImage`):
+   `tdrive-base` branch of [wesbiggs/TeensyROM](https://github.com/wesbiggs/TeensyROM) (upstream main plus the D64/D71/D81 engine TDrive
+   shares with GEOS and the menu, `Source/Teensy/DiskImage`):
    ```
    cd /path/to/TeensyROM && git apply /path/to/teensyrom-vdrive/firmware/teensyrom-tdrive.patch
    ```

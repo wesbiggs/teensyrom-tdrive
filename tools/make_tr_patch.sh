@@ -22,9 +22,6 @@ M=Source/C64/MainMenuCRT/source; mkdir -p "$W/$M" "$W/Source/Teensy/TRMenuFiles/
 cp "$TR/$M/MainMenu.asm" "$TR/$M/PRGLoadStartReloc.s" "$W/$M/"; cp "$TR/Source/Teensy/TRMenuFiles/ROMs/TeensyROMC64.h" "$W/Source/Teensy/TRMenuFiles/ROMs/"
 B128=Source/C64/C128PrgBoot; mkdir -p "$W/$B128"; cp "$TR/$B128/C128PrgBoot.asm" "$W/$B128/"; cp "$TR/Source/Teensy/TRMenuFiles/ROMs/C128PrgBoot.bin.h" "$W/Source/Teensy/TRMenuFiles/ROMs/"
 cd "$W"; git init -q; git add -A; git -c user.name=x -c user.email=x@x commit -qm base
-# fixes to upstream Kernal Replace (fast image copy, late-ISR counters): applied before the edits below, unless the tree has them
-# (the kernalreplace-fixes branch of the TeensyROM fork, which TDrive builds on, carries them as a commit of their own)
-if git apply --reverse --check "$HERE/firmware/kernalreplace-fixes.patch" 2>/dev/null; then :; else git apply "$HERE/firmware/kernalreplace-fixes.patch"; fi
 
 python3 -I - "$C" "$HERE/firmware/REV" "$HERE/firmware/tdrive_remote.inc" "$HERE/firmware/tdrive_probe.asm" <<'PY'
 import os, sys
@@ -102,18 +99,18 @@ edit(f"{C}/Common_Defs.h",
 edit("Source/Teensy/Teensy.ino",
      "   //future use:\n",
      "#ifdef TDrive_Any\n   EEPROM.write(eepAdTDriveDevs, 0);   //TDrive device numbers: 0 = defaults (8/9)\n   EEPROM.write(eepAdTDriveDevs+1, 0);\n#endif\n\n   //future use:\n")
-# The TDrive entries go *after* every upstream selectable entry (after IOH_GeoRAM, the last), so upstream's own handlers keep
+# The TDrive entries go *after* every upstream selectable entry (after IOH_USBMouse, the last since upstream 239cb5f0; IOH_GeoRAM before), so upstream's own handlers keep
 # their indices (a stored default Special IO, eepAdNextIOHndlr, still means the same one after flashing this build) and the TDrive
 # ones form a block at the end of the Special IO list. LastSelectableIOH moves to the last TDrive entry. (Include order is separate
 # and stays after IOH_KernalReplace.c, which IOH_TDrive.c needs.)
 TD_ENUM = ("   #ifdef Fab04_TDrive\n      IOH_TDrive,\n      IOH_TDriveSwift,\n   #ifdef Fab04_REU\n      IOH_TDriveSwiftREU,\n      IOH_TDriveREU,\n   #endif\n   #endif  \n"
            "   #ifdef TDrive_Agent\n      IOH_TDriveAgent,\n   #endif  \n")
 edit(f"{C}/Menu_Regs.h",
-     "      IOH_GeoRAM, //last manually selectable, see LastSelectableIOH\n",
-     "      IOH_GeoRAM, //last manually selectable, see LastSelectableIOH\n" + TD_ENUM)
+     "      IOH_USBMouse, //last manually selectable, see LastSelectableIOH\n",
+     "      IOH_USBMouse, //last manually selectable, see LastSelectableIOH\n" + TD_ENUM)
 edit(f"{C}/Menu_Regs.h",
-     "#define LastSelectableIOH  IOH_GeoRAM    //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n",
-     "#define LastSelectableIOH  IOH_GeoRAM    //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n"
+     "#define LastSelectableIOH  IOH_USBMouse  //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n",
+     "#define LastSelectableIOH  IOH_USBMouse  //127 max.  Used in IOH_TeensyROM.c for Special IO display/select\n"
      "#ifdef TDrive_Agent\n   #undef LastSelectableIOH\n   #define LastSelectableIOH  IOH_TDriveAgent   //the TDrive entries follow upstream's; the agent is last on both boards\n#endif\n")
 edit(f"{C}/IOHandlers.h",
      '   #ifdef Fab04_KernalReplace\n      #include "IO_Handlers/IOH_KernalReplace.c"\n   #endif    \n',
@@ -121,8 +118,8 @@ edit(f"{C}/IOHandlers.h",
      '   #ifdef TDrive_Any\n      #include "IO_Handlers/IOH_TDrive.c"\n   #endif    \n'
      '   #ifdef TDrive_Agent\n      #include "IO_Handlers/IOH_TDriveAgent.c"   //needs IOH_TDrive.c\n   #endif    \n')
 edit(f"{C}/IOHandlers.h",
-     "      &IOHndlr_GeoRAM,             //IOH_GeoRAM,\n",
-     "      &IOHndlr_GeoRAM,             //IOH_GeoRAM,\n"
+     "      &IOHndlr_USBMouse,           //IOH_USBMouse,\n",
+     "      &IOHndlr_USBMouse,           //IOH_USBMouse,\n"
      "   #ifdef Fab04_TDrive\n      &IOHndlr_TDrive,             //IOH_TDrive,\n      &IOHndlr_TDriveSwift,        //IOH_TDriveSwift,\n   #ifdef Fab04_REU\n      &IOHndlr_TDriveSwiftREU,     //IOH_TDriveSwiftREU,\n      &IOHndlr_TDriveREU,          //IOH_TDriveREU,\n   #endif\n   #endif  \n"
      "   #ifdef TDrive_Agent\n      &IOHndlr_TDriveAgent,        //IOH_TDriveAgent,\n   #endif  \n")
 edit(f"{C}/IOHandlers.h",
@@ -150,40 +147,16 @@ edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
      "FLASHMEM void InitHndlr_KERNALReplace_PreStart() //not called automatically via init; called earlier, manually, from KERNALPreStart()\n",
      "#ifdef Fab04_TDrive\n"
      "bool (*KernalImageSource)(uint8_t *Bin) = NULL; //fills Bin (8192 bytes) instead of the <Shift-K> file, false: nothing to serve (TDrive, set by KERNALPreStart())\n"
-     "static bool KernalFastOnly = false; //TDrive: the image is in KernalFast and KernalBin was freed after the copy (InitHndlr_KernalReplace still hooks it)\n"
      "#endif\n\n"
      "FLASHMEM void InitHndlr_KERNALReplace_PreStart() //not called automatically via init; called earlier, manually, from KERNALPreStart()\n")
 edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
      "   //load kernal image into RAM:\n",
      "#ifdef Fab04_TDrive\n"
-     "   if (KernalImageSource != NULL)\n   {\n      if (!KernalImageSource(KernalBin))\n      {\n         FreeKernalBin();\n         return;\n      }\n   }\n   else\n#endif\n"
+     "   if (KernalImageSource != NULL)\n   {\n      if (!KernalImageSource(KernalBin)) return; //KernalLoaded stays false: nothing hooked\n   }\n   else\n#endif\n"
      "   {\n   //load kernal image into RAM:\n")
 edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
      "   Serial.printf(\"Read %lu Bytes\\nKernal replace Enabled\\n\", CharNum);\n   LoadFile.close();\n",
      "   Serial.printf(\"Read %lu Bytes\\nKernal replace Enabled\\n\", CharNum);\n   LoadFile.close();\n   }\n")
-# TDrive serves only the DTCM copy (KernalFast) and never reads KernalBin again, so it gives the 8 KB heap buffer back: kept, it
-# cost TDrive+REU one 8 KB REU bank (63 banks, rounded to 256 KB; docs/DESIGN.md 50). The plain Kernal Replace keeps it (its
-# InitHndlr tests KernalBin for "loaded").
-edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
-     "   memcpy(KernalFast, KernalBin, 8192); //fast copy for the bus ISR\n#endif\n",
-     "   memcpy(KernalFast, KernalBin, 8192); //fast copy for the bus ISR\n#endif\n"
-     "#if defined(Fab04_TDrive) && !defined(KERNAL_NO_DTCM)\n"
-     "   if (KernalImageSource != NULL) { FreeKernalBin(); KernalFastOnly = true; } //TDrive serves KernalFast only: the 8 KB heap copy would cost the REU a bank\n"
-     "#endif\n")
-# ... so "loaded" is KernalBin or that flag: InitHndlr_KernalReplace (run by the TDrive inits after the PRG transfer) re-hooks KernalCheck
-# only when something was loaded. Testing KernalBin alone (0.9.0.54-0.9.0.55) left every TDrive launch from the menu on the C64's own
-# KERNAL once the program ran: the disk calls went to the real bus, and TDrive Config hung after its first screen output.
-edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
-     "FLASHMEM void InitHndlr_KERNALReplace_PreStart() //not called automatically via init; called earlier, manually, from KERNALPreStart()\n{\n",
-     "FLASHMEM void InitHndlr_KERNALReplace_PreStart() //not called automatically via init; called earlier, manually, from KERNALPreStart()\n{\n"
-     "#ifdef Fab04_TDrive\n   KernalFastOnly = false;\n#endif\n")
-edit(f"{C}/IO_Handlers/IOH_KernalReplace.c",
-     "   if (fBusSnoop != &HandshakeSnoop || KernalBin == NULL) return;\n",
-     "#ifdef Fab04_TDrive\n"
-     "   if (fBusSnoop != &HandshakeSnoop || (KernalBin == NULL && !KernalFastOnly)) return;\n"
-     "#else\n"
-     "   if (fBusSnoop != &HandshakeSnoop || KernalBin == NULL) return;\n"
-     "#endif\n")
 # The launch-time bus probe (docs/DESIGN.md 37). KERNALPreStart() first lets TDrive_ProbeStep() answer the menu's probe steps;
 # the menu clears rwRegScratch before PreStart (a TeensyROM without TDrive never sets it, so its menu skips the probe) and runs
 # TDriveProbe after it, with the C64's own KERNAL still in place.

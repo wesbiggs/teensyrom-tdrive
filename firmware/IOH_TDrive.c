@@ -737,7 +737,7 @@ FLASHMEM void TDrive_PreStart(bool agent)
    vio_publish_devices(vio);              //   or, with the agent, by the vector engine: docs/DESIGN.md 53)
 #ifdef Fab04_TDrive
    if (!agent) {
-      VD_BannerUnits(KernalFast, 8192, false);   // the image InitHndlr_KERNALReplace_PreStart() just loaded, before the C64 prints its banner
+      VD_BannerUnits(KernalBin, 8192, false);   // the image InitHndlr_KERNALReplace_PreStart() just loaded, before the C64 prints its banner
       VD_BannerRegs(true, false);                // and the same for a TDrive KERNAL the C64 holds itself
    }
 #endif
@@ -783,7 +783,7 @@ FLASHMEM static void VD_ProbeFinish()
    KDS_State = KDS_Idle;            // the C128's DMA HIRAM sense: the check was unhooked, no sense can be in flight
    KDS_Read01Valid = false;
    fBusSnoop = vdProbeSnoop ? KernalCheckArm() : NULL;   // the C64's or the C128's check, with HIRAM_State set for it
-   VD_BannerUnits(KernalFast, 8192, true);   // the probed numbers, so the banner need not probe again
+   VD_BannerUnits(KernalBin, 8192, true);   // the probed numbers, so the banner need not probe again
    VD_BannerRegs(true, true);
    Serial.printf("TDrive: bus probe gave dev %d (SD), %d (USB)\n", vio->vd.dev[0], vio->vd.dev[1]);
 }

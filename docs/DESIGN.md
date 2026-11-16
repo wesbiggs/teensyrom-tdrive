@@ -1292,3 +1292,39 @@ Risk: the crumbs share RAM2's top 128 bytes with the core's fault record, inside
 RAM2), as the core's own breadcrumbs do; a heap that reaches the top (a full REU) could be overwritten by them.
 `kernal-tr.bin` changes again (new SHA-256 in the README). Tests: `tests/fw_host` (both handler kinds' flash, the trace, `!nodma`);
 `make test-border` and `tests/test_irq_border.py` removed again.
+
+## 61. Rebased on upstream `7b8ef116`; `kernalreplace-fixes.patch` dropped (0.9.0.72; host tests and the TR+ firmware build; not on hardware)
+
+Upstream TeensyROM merged [PR 101](https://github.com/SensoriumEmbedded/TeensyROM/pull/101) (`64fe5cd8`): Kernal Replace serves its
+image from a static DTCM array, `uint8_t KernalBin[8192]`, and a `bool KernalLoaded` (cleared at the start of
+`InitHndlr_KERNALReplace_PreStart()`, set once the file is read) replaces the `KernalBin != NULL` test in `InitHndlr_KernalReplace()`.
+That is what `kernalreplace-fixes.patch` did with its second array `KernalFast`, and what 0.9.0.54-0.9.0.56 worked around for the REU
+(section 50): there is no heap buffer to free any more, so nothing costs the REU a bank. The patch file is gone and `make_tr_patch.sh`
+no longer applies it; its other part, the `LATE_ISR_TRACE` debug counters (`ISRs.c`, `Teensy.ino`), went with it (not in upstream;
+teensyrom-snoop's late-interrupt counter measures the same thing).
+
+The base is now the fork's branch `tdrive-base` (`firmware/UPSTREAM`): upstream `7b8ef116` plus the six `shared-disk-*` commits
+(the engine, block device, GEOS, menu loader and listing, write-back), rebased from `bc9a454b` (on `a2a2a80a`) with one conflict in
+`docs/TR_Block_Device.md` (both sides' lines kept). `Source/Teensy/DiskImage` is unchanged, so `d64/` still matches it byte for byte.
+There is no Kernal Replace commit in the base any more.
+
+`make_tr_patch.sh` edits, against the new tree:
+- `IOH_KernalReplace.c`: only `KernalImageSource` and the braced file branch remain. A failed `VD_KernalImage` returns with `KernalLoaded`
+  still false, so nothing is hooked (before: `FreeKernalBin()`). `KernalFastOnly`, the free after the copy and the edited re-hook test
+  are gone: upstream's `KernalLoaded` covers both.
+- `IOH_TDrive.c` writes the banner's unit bytes into `KernalBin` (was `KernalFast`); `tests/fw_host` defines `KernalBin[8192]`.
+- The Special IO anchors: upstream added `IOH_USBMouse` after `IOH_GeoRAM` (`239cb5f0`, the USB Mouse Special IO for Minesweeper) and made it
+  `LastSelectableIOH`, so the TDrive entries now follow it. Upstream's indices are unchanged; ours move up by one (TDrive is 11 where it was 10, etc.),
+  so a stored default that was a TDrive entry selects the entry before it after flashing (a stored TDrive: USB Mouse).
+
+Inherited from upstream with the rebase (not TDrive changes, none run with TDrive on hardware): #98 (a C128-mode launch drops Kernal
+Replace; `TDrive_C128Launch()` already ran after it, section 56), #92 / #100 (host DMA writes beside REU emulation, host REU writes), #93
+(`DbgSnoopTap`), #99 (DMA write timing), #102, #103 (the build masks only priority 32 and lower in the core's USB `schedule_transfer()`,
+so `isrPHI2` keeps running: cause (1) of the remote-command crashes in CLAUDE.md, and the reason the KERNAL's double reads were kept),
+#104 / `239cb5f0` (Minesweeper, USB Mouse Special IO), #105.
+
+`KernalCheck` disassembly checked (no push before the non-KERNAL returns); `KernalBin` is at `0x20014600` (DTCM). Fit (TR+ main image):
+RAM1 free for locals 54812, padding 24744; RAM2 free for malloc 506688.
+
+Tested: `tests/fw_host`, `make test`, the patch generated from and applied to a `git archive` of `tdrive-base`, the TR+ build from it
+(`TeensyROM+_0.9.0.72_full.hex`) and upstream's `npm test` on the patched tree (473 pass). Not on hardware.
