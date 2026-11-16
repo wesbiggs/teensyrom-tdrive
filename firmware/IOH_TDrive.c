@@ -676,17 +676,57 @@ FLASHMEM static void VD_ProbeBegin();
 void VD_BannerUnits(uint8_t *img, int size, bool settled);   // below
 void VD_BannerRegs(bool on, bool settled);
 
+// CloseDMA with the bus snoop held off until the release. isrPHI2 handles DMA_S_StartDisable only after fBusSnoop has declined the
+// cycle, and while /DMA is held nobody drives the address bus: it reads as a CPU read of $E000-$FFFF (R/W pulled up), which
+// KernalCheck takes every time. Only a cycle with BA low (a badline, a sprite fetch) got through, so with the screen blanked and the
+// sprites off the release never came: CloseDMA gave up after 2 x 50 ms, dropped /DMA unsynchronised and the LOAD failed with
+// DEVICE NOT PRESENT (q4k's loads, owner, C128 in C64 mode, 2026-11-16; docs/DESIGN.md 62). vdCloseSnoop declines every cycle while the
+// release is pending and hands the rest to the hooked check, so the first CPU cycle after the release is served as before.
+#ifdef Fab04_TDrive                // the KERNAL handlers (TR+ only, so DMA-capable) hook a check; the agent has none
+static bool (*vdSnoopHeld)(uint16_t, bool) = NULL;
+FASTRUN static bool vdCloseSnoop(uint16_t Address, bool R_Wn)
+{
+   if (DMA_State == DMA_S_StartDisable) return false;
+   return vdSnoopHeld(Address, R_Wn);
+}
+FLASHMEM static bool VD_CloseDMA()
+{
+   bool (*snoop)(uint16_t, bool) = fBusSnoop;
+   if (snoop == NULL || snoop == &vdCloseSnoop) return CloseDMA();
+   vdSnoopHeld = snoop;
+   fBusSnoop = &vdCloseSnoop;
+   bool ok = CloseDMA();
+   if (fBusSnoop == &vdCloseSnoop) fBusSnoop = snoop;   // (the ISR does not change it while the CPU is held)
+   return ok;
+}
+#endif
+
 #ifdef Fab04_TDriveDMALoad
+// Every DMA of the drive: how many, how they failed and the longest, in the remote get's "dbg" JSON ("dma"; docs/DESIGN.md 62).
+struct stcVDDmaDbg { uint32_t n, startFail, closeFail, maxUs, lastFailMs; uint16_t lastFailAddr; };
+static stcVDDmaDbg vdDmaDbg;
+FLASHMEM static int VD_DmaDo(DMA_Trans_RnW rnw, uint16_t addr, uint8_t *buf, uint16_t len)
+{
+   uint32_t t0 = micros();
+   vdDmaDbg.n++;
+   bool ok = PerformDMA(rnw, addr, buf, len, DMA_ADDR_INCREMENT);
+   if (!ok) vdDmaDbg.startFail++;
+   else if (!VD_CloseDMA()) { vdDmaDbg.closeFail++; ok = false; }
+   uint32_t us = micros() - t0;
+   if (us > vdDmaDbg.maxUs) vdDmaDbg.maxUs = us;
+   if (!ok) { vdDmaDbg.lastFailMs = millis(); vdDmaDbg.lastFailAddr = addr; }
+   return ok;
+}
 // vio's DMA write: the CPU waits in the KERNAL's mailbox loop meanwhile (vcall), and the bus ISR skips the snoop for the transfer.
 FLASHMEM static int VD_DmaWrite(void *, uint16_t addr, const uint8_t *buf, uint16_t len)
 {
-   return PerformDMA(DMA_WRITE, addr, (uint8_t *)buf, len, DMA_ADDR_INCREMENT) && CloseDMA();
+   return VD_DmaDo(DMA_WRITE, addr, (uint8_t *)buf, len);
 }
 // vio's DMA read (SAVE, VERIFY, and the KERNAL's pointers in zero page): only $0000-$CFFF is asked for (vio_dma_rd_ok and the
 // VIO_DMA_* zero-page bytes), where a DMA read sees what the CPU sees; never the served KERNAL's $E000-$FFFF.
 FLASHMEM static int VD_DmaRead(void *, uint16_t addr, uint8_t *buf, uint16_t len)
 {
-   return PerformDMA(DMA_READ, addr, buf, len, DMA_ADDR_INCREMENT) && CloseDMA();
+   return VD_DmaDo(DMA_READ, addr, buf, len);
 }
 #endif
 #endif
@@ -1043,11 +1083,59 @@ FLASHMEM static void VD_PollCommon(bool did)
 }
 
 #ifdef Fab04_TDrive
+// The last VD_CmdLogN mailbox commands with the time each was answered (ms since the handler started), the answer, and the
+// Kernal Replace HIRAM state then (HIRAM_State, KDS_Guess, KDS_State: the C128's DMA sense); counters of the DEVICE NOT PRESENT
+// paths: FLOAD_OPEN answered not mine, FLOAD_OPEN answered 5, FLOAD_DMA answered not mine. In the remote get's "dbg" JSON
+// (docs/DESIGN.md 62). Main loop only: nothing here runs in the bus ISR.
+#define VD_CmdLogN 16
+struct stcVDCmdLog { uint32_t ms; uint8_t cmd, arg, len, stat, data, st, hiram; };
+static stcVDCmdLog vdCmdLog[VD_CmdLogN];
+static uint32_t vdCmdLogNext = 0, vdCmdT0 = 0;
+static uint32_t vdOpenNotMine = 0, vdOpen5 = 0, vdBlkNotMine = 0, vdOpens = 0;
 FLASHMEM void PollingHndlr_TDrive()
 {
    if (vio == NULL) return;
-   VD_PollCommon(vio_poll(vio) != 0);
+   uint8_t cmd = vioHot.cmd, arg = vioHot.arg, len = vioHot.len;
+   bool did = vio_poll(vio) != 0;
+   if (did)
+   {
+      stcVDCmdLog &e = vdCmdLog[vdCmdLogNext++ % VD_CmdLogN];
+      e.ms = millis() - vdCmdT0; e.cmd = cmd; e.arg = arg; e.len = len;
+      e.stat = vioHot.stat; e.data = vioHot.data; e.st = vioHot.st;
+#ifdef Fab04_TDrive
+      e.hiram = (uint8_t)(HIRAM_State | KDS_Guess << 2 | KDS_State << 4);
+#else
+      e.hiram = 0;
+#endif
+      if (cmd == VIO_FLOAD_OPEN)
+      {
+         vdOpens++;
+         if (vioHot.stat == VIO_NOTMINE) vdOpenNotMine++;
+         else if (vioHot.data == 5) vdOpen5++;
+      }
+      if ((cmd == VIO_FLOAD_DMA || cmd == VIO_FLOAD_BLK) && vioHot.stat == VIO_NOTMINE) vdBlkNotMine++;
+   }
+   VD_PollCommon(did);
 }
+FLASHMEM static int VD_CmdLogJson(char *out, size_t cap)
+{
+   int n = snprintf(out, cap, ",\"ld\":[%lu,%lu,%lu,%lu],\"now\":%lu,\"log\":\"",
+                    (unsigned long)vdOpens, (unsigned long)vdOpenNotMine, (unsigned long)vdOpen5, (unsigned long)vdBlkNotMine,
+                    (unsigned long)(millis() - vdCmdT0));
+   if (n <= 0 || (size_t)n >= cap) return 0;
+   uint32_t k = vdCmdLogNext > VD_CmdLogN ? vdCmdLogNext - VD_CmdLogN : 0;
+   for (; k < vdCmdLogNext; k++)
+   {
+      const stcVDCmdLog &e = vdCmdLog[k % VD_CmdLogN];
+      int m = snprintf(out + n, cap - n, "%lu:%u,%02x,%02x>%02x,%02x,%02x,%02x ", (unsigned long)e.ms, e.cmd, e.arg, e.len,
+                       e.stat, e.data, e.st, e.hiram);
+      if (m <= 0 || (size_t)(n + m) + 4 >= cap) break;
+      n += m;
+   }
+   out[n++] = '"'; out[n] = 0;
+   return n;
+}
+
 #endif
 
 // ---- remote control: the get / set commands on the TCP 2112 / USB serial port (SerUSBIO.ino) ------------------------------
@@ -1493,7 +1581,7 @@ FLASHMEM static bool VD_BorderDMA(uint8_t reg)
       else if (!VD_HeldDMA(DMA_WRITE, 0xD020, &color, 1)) { ok = false; vdBorderDbg.xferFail++; }
       else { vdBorderDbg.written++; VD_Trace(VDT_Write, color, false); }
    }
-   if (!CloseDMA()) vdBorderDbg.closeFail++;
+   if (!VD_CloseDMA()) vdBorderDbg.closeFail++;
    const uint32_t us = micros() - t0;
    if (us > vdBorderDbg.maxUs) vdBorderDbg.maxUs = us;
    VD_Crumb(5, vdBorderDbg.req << 16 | (vdBorderDbg.written & 0xFFFF));
@@ -1511,10 +1599,22 @@ FLASHMEM static bool VD_BorderDMA(uint8_t reg)
 FLASHMEM static int VD_DbgJson(char *out, size_t cap)
 {
    const stcVDBorderDbg &b = vdBorderDbg;
-   int n = snprintf(out, cap, ",\"dbg\":{\"brd\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu]}",
+   int n = snprintf(out, cap, ",\"dbg\":{\"brd\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu]",
                     (unsigned long)b.req, (unsigned long)b.holdFail, (unsigned long)b.xferFail, (unsigned long)b.notVIC,
                     (unsigned long)b.written, (unsigned long)b.closeFail, (unsigned long)b.maxUs);
-   return (n > 0 && (size_t)n < cap) ? n : 0;
+   if (n <= 0 || (size_t)n >= cap) return 0;
+#ifdef Fab04_TDriveDMALoad
+   const stcVDDmaDbg &d = vdDmaDbg;   // DMAs, PerformDMA failed, CloseDMA failed, longest (us), last failure (ms), its address
+   int m = snprintf(out + n, cap - n, ",\"dma\":[%lu,%lu,%lu,%lu,%lu,%u]", (unsigned long)d.n, (unsigned long)d.startFail,
+                    (unsigned long)d.closeFail, (unsigned long)d.maxUs, (unsigned long)(d.lastFailMs ? d.lastFailMs - vdCmdT0 : 0),
+                    d.lastFailAddr);
+   if (m <= 0 || (size_t)(n + m) >= cap) return 0;
+   n += m;
+#endif
+   n += VD_CmdLogJson(out + n, cap - n);
+   if ((size_t)n + 2 >= cap) return 0;
+   out[n++] = '}'; out[n] = 0;
+   return n;
 }
 #else
 static bool VD_BorderDMA(uint8_t) { return true; }   // the plain TR has no Alt button: never called
@@ -1675,6 +1775,11 @@ FLASHMEM void VD_AltButtonInit()
    vdBorderReq = VIO_BRD_IDLE; vdBorderSaved = 0xFF;
 #ifdef Fab04_TDrive
    memset(&vdBorderDbg, 0, sizeof vdBorderDbg);
+   memset(vdCmdLog, 0, sizeof vdCmdLog); vdCmdLogNext = 0; vdCmdT0 = millis();   // the command log and counters
+   vdOpenNotMine = vdOpen5 = vdBlkNotMine = vdOpens = 0;
+#ifdef Fab04_TDriveDMALoad
+   memset(&vdDmaDbg, 0, sizeof vdDmaDbg);
+#endif
 #endif
 #ifdef Fab04_SpecialButton
    if ((IO1[rwRegPwrUpDefaults2] & rpud2AltBtnActionMask) == rpud2AltBtnNone) fSpecialBtnChange = &SpecialBtn_TDrive;

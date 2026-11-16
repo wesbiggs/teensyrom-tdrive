@@ -1328,3 +1328,40 @@ RAM1 free for locals 54812, padding 24744; RAM2 free for malloc 506688.
 
 Tested: `tests/fw_host`, `make test`, the patch generated from and applied to a `git archive` of `tdrive-base`, the TR+ build from it
 (`TeensyROM+_0.9.0.72_full.hex`) and upstream's `npm test` on the patched tree (473 pass). Not on hardware.
+
+## 62. A blank screen held the DMA line: DEVICE NOT PRESENT after a DMA LOAD part (0.9.0.73; host test; works on hardware)
+
+**Symptom** (owner, 2026-11-16, C128 in C64 mode, the `-DMA` build): *Quest for the King*'s engine loads `ow-cpu.hi` right after
+`OW-CPU`, and an overlay right after that; both failed with DEVICE NOT PRESENT on all three of `load3()`'s tries, and worked after the
+error screen's key wait. The window build was fine.
+
+**Found with counters** added for it (kept, below): `ld` showed all eight opens answered normally and three `FLOAD_DMA` parts answered
+not mine; `dma` showed three failed `CloseDMA` calls, none failed at the start, the last on the 2 KB write at `$52C0` (`ow-cpu.hi`), and
+a longest DMA of 100994 µs: `CloseDMA`'s 50 ms ceiling plus `AbortDMAUnless`'s 50 ms, after which `/DMA` is dropped unsynchronised and
+the call fails. The log's HIRAM byte was ROM throughout, so the KERNAL was served (the C128 HIRAM sense was not involved).
+
+**Cause.** `isrPHI2` runs `fBusSnoop` before its DMA state machine and returns when the snoop claims the cycle, so
+`DMA_S_StartDisable` is only acted on in a cycle the snoop declines. While `/DMA` holds the CPU nobody drives the address bus, and (inferred from the
+counters, not measured) it reads as a CPU read of `$E000-$FFFF`, which `KernalCheck` claims every time. Only a cycle with BA low got through
+(`KernalCheck` returns false then): a badline or a sprite fetch. q4k blanks the screen and turns the sprites off before disk work
+(`disk_on()`), so no cycle got through; with the display on every LOAD had worked (the next badline came within a line). Every DMA
+build since 0.9.0.52 had it; the border flash's `CloseDMA` too (possibly a part of section 60's crashes: an unsynchronised release).
+Same family as the start-side note in section 60: the safe-freeze states are also only seen on cycles the snoop declines.
+
+**Fix, in the glue (upstream's ISR untouched):** `VD_CloseDMA()` (`IOH_TDrive.c`) swaps `fBusSnoop` for `vdCloseSnoop` (`FASTRUN`)
+around `CloseDMA()`: it returns false while `DMA_State == DMA_S_StartDisable` and otherwise calls the saved check, so the release
+comes on the next cycle and the CPU's first cycle after it is served as before; the pointer goes back when `CloseDMA()` returns (the
+wrapper costs one test on the few cycles in between). Used by the DMA LOAD/SAVE/VERIFY transfers (`VD_DmaDo`) and the border flash;
+not the PreStart KERNAL read (no snoop hooked then) or the agent (none hooked). Changing the ISR's order would fix it for every DMA
+user (upstream's remote DMA under Kernal Replace with a blank screen is exposed too), but the 0.9.0.67 ISR edit broke Exit to C128
+BASIC; a candidate for an upstream issue.
+
+**Counters kept** (main loop only), in the remote get's `"dbg"` beside `brd`:
+- `dma`: DMAs, `PerformDMA` failed, `CloseDMA` failed, longest µs, ms of the last failure (since the handler started), its C64 address.
+- `ld`: `FLOAD_OPEN`s, answered not mine, answered 5 (no device), `FLOAD_DMA`/`FLOAD_BLK` answered not mine.
+- `now` (ms) and `log`: the last 16 mailbox commands as `ms:cmd,arg,len>stat,data,st,hiram`, `hiram` = `HIRAM_State | KDS_Guess << 2 |
+  KDS_State << 4`. The log is cut to what fits the 876-byte reply.
+
+Tested: `tests/fw_host` (its `CloseDMA` stub now releases only on a cycle `fBusSnoop` declines; a blank-bus DMA LOAD passes with the
+fix and a plain `CloseDMA` fails there). **On hardware (owner, 2026-11-16, C128 in C64 mode):** q4k's loads work, the longest DMA is
+2319 µs, the Alt-button flash works.

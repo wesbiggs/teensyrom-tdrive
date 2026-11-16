@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.9.0.73
+
+### Fixed
+- **DMA builds: a LOAD started with the screen blanked and sprites off could fail with DEVICE NOT PRESENT** (seen in *Quest for the King*,
+  whose engine and overlay loads failed right after the previous load and worked after a key press). Each 2 KB part was written,
+  but the TeensyROM could not let the C64 run again: its bus interrupt only releases the DMA line on a cycle the Kernal Replace
+  check does not claim, and while the line is held the idle address bus looks like a KERNAL read, which the check claims every time.
+  Only VIC badlines and sprite fetches let a cycle through, so with the display off the release gave up after 100 ms and the load
+  failed. The drive now holds the check off until the release, for DMA LOAD, SAVE and VERIFY and for the Alt button's border flash.
+  Every DMA build since DMA LOAD (0.9.0.52) had the bug. **Works on hardware (owner, 2026-11-16, C128 in C64 mode): the game's
+  loads work, a 2 KB part takes 2.3 ms, the Alt-button flash works.** Host test. `docs/DESIGN.md` section 62.
+
+### Added
+- **More counters in the remote get's `"dbg"` JSON** (`trlib`'s `vdrive_get()`; `trvdrive` does not print them): `dma` (DMAs, failed
+  starts, failed releases, the longest in µs, when the last one failed and its address), `ld` (fast LOAD opens and the ways a LOAD
+  ends in DEVICE NOT PRESENT) and `log`, the last 16 mailbox commands with their answers and times. `docs/DESIGN.md` section 62.
+
 ## v0.9.0.72
 
 ### Changed

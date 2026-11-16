@@ -167,7 +167,7 @@ extern bool (*fBusSnoop)(uint16_t Address, bool R_Wn);
 bool KernalCheck(uint16_t Address, bool R_Wn);
 extern uint8_t HIRAM_State;
 enum { HIRAM_State_Unknown = 0, HIRAM_State_ROM, HIRAM_State_RAM };
-extern volatile uint8_t KDS_State;                    // IOH_KernalReplace.c: the C128's DMA HIRAM sense
+extern uint8_t KDS_Guess; extern volatile uint8_t KDS_State;                  // IOH_KernalReplace.c: the C128's DMA HIRAM sense
 extern bool KDS_Read01Valid;
 enum { KDS_Idle = 0 };
 bool (*KernalCheckArm())(uint16_t Address, bool R_Wn); // the check a launch hooks (KernalCheck on a C64)
@@ -189,7 +189,7 @@ enum DMA_Addr_Mode { DMA_ADDR_FIXED = true, DMA_ADDR_INCREMENT = false };
 bool PerformDMA(DMA_Trans_RnW RnW, uint16_t StartAddr, uint8_t *Buffer, uint32_t Length, DMA_Addr_Mode FixC64Addr);
 bool CloseDMA();
 // a held transfer (HoldC64, SetUpDMA, DMA_State = DMA_S_TransferExecuting): main.cpp runs it when the state is set, as isrPHI2 would
-enum { DMA_S_DisableReady = 0, DMA_S_TransferReady, DMA_S_TransferExecuting, DMA_S_TransferComplete };
+enum { DMA_S_DisableReady = 0, DMA_S_TransferReady, DMA_S_TransferExecuting, DMA_S_TransferComplete, DMA_S_StartDisable };
 void SetUpDMA(DMA_Trans_RnW RnW, uint16_t StartAddr, uint8_t *Buffer, uint32_t Length, DMA_Addr_Mode FixC64Addr);
 bool HoldC64();
 void DmaStubRun();

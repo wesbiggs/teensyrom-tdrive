@@ -27,6 +27,7 @@ bool USBFileSystemWait() { g_fs_probes++; return fs_::exists(firstPartition.root
 void InitHndlr_KernalReplace() {}
 uint8_t HIRAM_State = 0;
 volatile uint8_t KDS_State = 0;
+uint8_t KDS_Guess = 0;
 bool KDS_Read01Valid = false;
 volatile uint8_t BtnPressed = 0;
 uint8_t KernalBin[8192];                             // the image IOH_KernalReplace.c serves (TDrive_PreStart writes the banner bytes)
@@ -52,7 +53,21 @@ bool PerformDMA(DMA_Trans_RnW RnW, uint16_t StartAddr, uint8_t *Buffer, uint32_t
     memcpy(Buffer, g_c64_kernal + (StartAddr - 0xE000), Length); g_dma_reads++;
     return true;
 }
-bool CloseDMA() { return true; }
+// CloseDMA as isrPHI2 does it: the release (DMA_S_StartDisable) is handled only on a cycle fBusSnoop declines. g_blank_bus: every
+// held cycle reads as a CPU read of $FFFF (the floating bus, no badline), which KernalCheck takes; 100 cycles stand for the ceilings.
+bool g_blank_bus = false; int g_close_fail = 0;
+static bool g_kc_takes_kernal = false;
+bool CloseDMA()
+{
+    DMA_State = DMA_S_StartDisable;
+    for (int i = 0; i < 100; i++) {
+        if (fBusSnoop && fBusSnoop(g_blank_bus ? 0xFFFF : 0x0000, true)) continue;
+        DMA_State = DMA_S_DisableReady;
+        return true;
+    }
+    DMA_State = DMA_S_DisableReady; g_close_fail++;
+    return false;
+}
 // held transfers (the Alt button's border flash): $D020-$D02E behave like the VIC's colour registers (the top nibble reads back set)
 DmaStateStub DMA_State;
 bool isFrozen = false;
@@ -101,7 +116,7 @@ void IO2Hndlr_REU(uint8_t a, bool R_Wn)
         else fBusSnoop = &REU_FF00_W_Check;                           // wait for a write to $FF00
     }
 }
-bool KernalCheck(uint16_t, bool) { g_kc++; return false; }
+bool KernalCheck(uint16_t a, bool r) { g_kc++; return g_kc_takes_kernal && r && a >= 0xE000; }   // takes $E000-$FFFF reads when asked
 bool (*KernalCheckArm())(uint16_t, bool) { HIRAM_State = HIRAM_State_Unknown; return &KernalCheck; }   // a C64
 #include "IO_Handlers/vdreu.c"      // = firmware/IOH_TDriveREU.c
 #include "IO_Handlers/swiftreu.c"   // = firmware/IOH_TDriveSwiftREU.c
@@ -543,6 +558,17 @@ int main(int argc, char **argv)
         end = dma_load(8, "DMAFILE", 0x0100, &rc);                     // the stack page: the window first, DMA from $0200
         same = true; for (size_t i = 0; i < big.size(); i++) same = same && g_c64_ram[0x0100 + i] == (uint8_t)big[i];
         check("... loaded at $0100: the window below $0200, then DMA", end == 0x0100 + 5000 && same && g_dma_writes == 6);
+        {   // the screen blanked, sprites off (q4k): the held bus reads as $FFFF and KernalCheck takes every cycle (DESIGN 62)
+            bool (*was)(uint16_t, bool) = fBusSnoop;
+            fBusSnoop = &KernalCheck; g_kc_takes_kernal = true; g_blank_bus = true; g_close_fail = 0;
+            memset(g_c64_ram, 0x55, sizeof g_c64_ram);
+            int e = dma_load(8, "DMAFILE", -1, &rc);
+            check("DMA LOAD with a blank screen: the release is not held up by KernalCheck",
+                  rc == 0 && e == 0x0801 + 5000 && g_close_fail == 0 && memcmp(g_c64_ram + 0x0801, big.data(), big.size()) == 0);
+            check("... and KernalCheck is hooked again afterwards", fBusSnoop == &KernalCheck);
+            check("... the stub does fail a plain CloseDMA there (the test can see the bug)", !CloseDMA() && g_close_fail == 1);
+            g_kc_takes_kernal = false; g_blank_bus = false; fBusSnoop = was;
+        }
         g_dma_wfail = true;
         check("... a failed DMA answers not mine (the KERNAL reports an error)", dma_load(8, "DMAFILE", -1, &rc) == -2);
         g_dma_wfail = false;
@@ -869,7 +895,7 @@ int main(int argc, char **argv)
         check("remote get: USB unit is device 9", has(1, "\"storage\":\"usb\",\"device\":9"));
         check("remote get: no unit 2", TDrive_RemoteStatus(2, js, sizeof js) == 0 && TDrive_RemoteStatus(-1, js, sizeof js) == 0);
         check("remote get: output too small is refused, not truncated", TDrive_RemoteStatus(0, js, 20) == 0);
-        check("remote get: the border flash counters close the object", has(0, ",\"dbg\":{\"brd\":[") && has(0, "]}}"));
+        check("remote get: the border flash counters close the object", has(0, ",\"dbg\":{\"brd\":[") && has(0, "\"}}"));
 
         g_tick = 1;                                           // let the waiting code see time pass
         check("remote set: mounts an image on SD", TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg) == 0 && vdUnit[0].mounted);
