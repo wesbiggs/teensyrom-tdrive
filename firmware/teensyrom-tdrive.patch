@@ -200,7 +200,7 @@ index 5c20eda..760e23e 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index c3bb60e..37c5401 100644
+index 91aca90..d0d35ac 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -221,8 +221,8 @@ index c3bb60e..37c5401 100644
    // #define DbgSignalSenseReset
  
  
--#define TRVersion              "0.9"    //*VERSION*
-+#define TRVersion              "0.9.0.73"    //*VERSION*  (stock 0.9 + TDrive rev 73)
+-#define TRVersion              "0.9.0.1"    //*VERSION*
++#define TRVersion              "0.9.0.1.73"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 73)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.

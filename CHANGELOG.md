@@ -17,6 +17,12 @@
   starts, failed releases, the longest in µs, when the last one failed and its address), `ld` (fast LOAD opens and the ways a LOAD
   ends in DEVICE NOT PRESENT) and `log`, the last 16 mailbox commands with their answers and times. `docs/DESIGN.md` section 62.
 
+### Changed
+- **Rebased on upstream TeensyROM `a1dbf5e3`** (upstream's version is now `0.9.0.1`, its first beta toward 0.9.1), so this firmware
+  calls itself **`0.9.0.1.73`** (the menu title, the hex name `TeensyROM+_0.9.0.1.73_full.hex`, the flash tool) rather than `0.9.0.73`.
+  No other upstream change. The fork's `tdrive-base` is the same commit as its `shared-disk-image` (`9df749d5`). Patch applies
+  cleanly; **not built or on hardware yet**.
+
 ## v0.9.0.72
 
 ### Changed
