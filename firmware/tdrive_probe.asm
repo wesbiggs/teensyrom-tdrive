@@ -2,7 +2,7 @@
 ;KERNAL back and asks (rwRegScratch nonzero) for a probe of the serial bus, done here with the C64's own KERNAL, so the
 ;program finds the right numbers in $DE16/$DE17 from its first instruction. Each number from 8 up that no drive answers
 ;is offered with another PreStart (rwRegScratch = the number); the answer is how many drives still wait. $ff: none left.
-;(teensyrom-vdrive firmware/tdrive_probe.asm, inserted into MainMenu.asm by tools/make_tr_patch.sh; docs/DESIGN.md 37)
+;(teensyrom-tdrive firmware/tdrive_probe.asm, inserted into MainMenu.asm by tools/make_tr_patch.sh; docs/DESIGN.md 37)
 TDriveProbe:
    lda rwRegScratch+IO1Port
    beq TDriveProbeDone ;nothing to probe

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.0.74
+
+### Build
+- The GitHub repository is now `wesbiggs/teensyrom-tdrive` (was `teensyrom-vdrive`; GitHub redirects the old URL). The README's
+  install line, the build tools and the comments the patch carries into the TeensyROM tree use the new name. No firmware change.
+
 ## v0.9.0.73
 
 ### Fixed

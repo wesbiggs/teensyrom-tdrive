@@ -43,7 +43,7 @@ The C64's ability to read the 8 KB of RAM under KERNAL ROM ($E000-$FFFF) is used
    `tdrive-base` branch of [wesbiggs/TeensyROM](https://github.com/wesbiggs/TeensyROM) (upstream main plus the D64/D71/D81 engine TDrive
    shares with GEOS and the menu, `Source/Teensy/DiskImage`):
    ```
-   cd /path/to/TeensyROM && git apply /path/to/teensyrom-vdrive/firmware/teensyrom-tdrive.patch
+   cd /path/to/TeensyROM && git apply /path/to/teensyrom-tdrive/firmware/teensyrom-tdrive.patch
    ```
    The patch adds `Fab04_TDrive` (enabled next to `Fab04_KernalReplace` in `Common_Defs.h`), the Special IOs
    `IOH_TDrive` ("TDrive KERNAL"), `IOH_TDriveSwift` ("TDrive+SwiftLink"), `IOH_TDriveSwiftREU` ("TDrive+Swift+REU") and `IOH_TDriveREU` ("TDrive+REU")

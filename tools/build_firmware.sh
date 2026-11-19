@@ -49,7 +49,7 @@ PY
 fi
 # Committed so the tree is clean: the build date comes from the commit, and newer upstream build scripts mark a dirty tree's version ('*', -dirty).
 git add -A
-git -c user.name=teensyrom-vdrive -c user.email=noreply@invalid commit -qm "teensyrom-vdrive $(cat "$HERE/firmware/REV")"
+git -c user.name=teensyrom-tdrive -c user.email=noreply@invalid commit -qm "teensyrom-tdrive $(cat "$HERE/firmware/REV")"
 
 if [ $INSTALL = 1 ]; then
   CLI="$(node tools/install-arduino-cli.mjs)"
