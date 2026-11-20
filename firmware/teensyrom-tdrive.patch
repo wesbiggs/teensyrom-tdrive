@@ -1,5 +1,5 @@
 diff --git a/Source/C64/C128PrgBoot/C128PrgBoot.asm b/Source/C64/C128PrgBoot/C128PrgBoot.asm
-index 3ad4ded..97b1cf4 100644
+index 3ad4ded..a8d9478 100644
 --- a/Source/C64/C128PrgBoot/C128PrgBoot.asm
 +++ b/Source/C64/C128PrgBoot/C128PrgBoot.asm
 @@ -91,6 +91,27 @@ loaded  lda prgEnd
@@ -31,7 +31,7 @@ index 3ad4ded..97b1cf4 100644
  -       lda runKeys,x
          sta KEYBOARD_BUFFER,x
 diff --git a/Source/C64/MainMenuCRT/source/MainMenu.asm b/Source/C64/MainMenuCRT/source/MainMenu.asm
-index fca3660..0cda23e 100644
+index fca3660..0d7ae1e 100644
 --- a/Source/C64/MainMenuCRT/source/MainMenu.asm
 +++ b/Source/C64/MainMenuCRT/source/MainMenu.asm
 @@ -903,9 +903,12 @@ XferCopyRun:
@@ -99,7 +99,7 @@ index fca3660..0cda23e 100644
     lda #rpudSIDPauseMask    ;Pause SID playback on error
     sta smcSIDPauseStop+1
 diff --git a/Source/C64/MainMenuCRT/source/PRGLoadStartReloc.s b/Source/C64/MainMenuCRT/source/PRGLoadStartReloc.s
-index 53998d0..07e38ed 100644
+index 53998d0..9614812 100644
 --- a/Source/C64/MainMenuCRT/source/PRGLoadStartReloc.s
 +++ b/Source/C64/MainMenuCRT/source/PRGLoadStartReloc.s
 @@ -96,6 +96,19 @@ MsgRunning:
@@ -123,7 +123,7 @@ index 53998d0..07e38ed 100644
     lda #0    ;set to non-zero to skip printing MsgRunning
     bne +
 diff --git a/Source/Teensy/C128Prg.ino b/Source/Teensy/C128Prg.ino
-index b9f2ec2..48397fe 100644
+index b9f2ec2..3afdde8 100644
 --- a/Source/Teensy/C128Prg.ino
 +++ b/Source/Teensy/C128Prg.ino
 @@ -85,11 +85,18 @@ FLASHMEM void LaunchC128BasicPrg(uint8_t *Prg, uint32_t Size)
@@ -200,7 +200,7 @@ index 5c20eda..760e23e 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 91aca90..d0d35ac 100644
+index 91aca90..e65c5d5 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -222,7 +222,7 @@ index 91aca90..d0d35ac 100644
  
  
 -#define TRVersion              "0.9.0.1"    //*VERSION*
-+#define TRVersion              "0.9.0.1.73"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 73)
++#define TRVersion              "0.9.0.1.74"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 74)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
@@ -365,10 +365,10 @@ index 5ba190e..4f0a9b6 100644
              TxMsgOffset = 0;
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
 new file mode 100644
-index 0000000..c9bca58
+index 0000000..8455c58
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
-@@ -0,0 +1,1823 @@
+@@ -0,0 +1,1894 @@
 +// The TDrive Special IOs: the virtual IEC drive and its SD / USB glue. On the TeensyROM+ (Fab04_TDrive) "TDrive KERNAL" and its
 +// combined handlers serve a replacement KERNAL; on both boards (TDrive_Agent) IOH_TDriveAgent.c reaches the same drive through the
 +// KERNAL's RAM vectors and a 6502 agent (docs/DESIGN.md 53). The KERNAL-only parts are under Fab04_TDrive.
@@ -518,10 +518,10 @@ index 0000000..c9bca58
 +   return vd_alias(host, out);
 +}
 +
-+// How many entries of the unit's folder show as `shown`; the host name of the last one goes to host (if given).
-+FLASHMEM static int VD_CountShown(stcVDUnit *u, const char *shown, char *host, size_t cap, int *alias)
++// How many entries of folder dir (host path, "" = root) show as `shown`; the host name of the last one goes to host (if given).
++FLASHMEM static int VD_CountShownIn(FS *fs, const char *dir, const char *shown, char *host, size_t cap, int *alias)
 +{
-+   File d = u->fs->open(u->cwd[0] ? u->cwd : "/");
++   File d = fs->open(dir[0] ? dir : "/");
 +   if (!d) return 0;
 +   int n = 0;
 +   while (File e = d.openNextFile())
@@ -533,6 +533,64 @@ index 0000000..c9bca58
 +   }
 +   d.close();
 +   return n;
++}
++
++FLASHMEM static int VD_CountShown(stcVDUnit *u, const char *shown, char *host, size_t cap, int *alias)
++{
++   return VD_CountShownIn(u->fs, u->cwd, shown, host, cap, alias);
++}
++
++// A whole host path (ASCII, from /tdrive-config.txt or a remote set) whose components may be C64 aliases: TDrive Config writes the
++// names its browser showed, e.g. "/long folder^name/the-pu^side1.d64". Every component that does not exist as written and holds a
++// '^' becomes the host name it is the alias of (when exactly one entry shows as it); anything else is copied unchanged.
++FLASHMEM static void VD_ResolvePath(FS *fs, const char *in, char *out, size_t cap)
++{
++   size_t n = 0;
++   out[0] = 0;
++   for (const char *s = in; *s && n + 1 < cap; )
++   {
++      if (*s == '/') { if (!n || out[n - 1] != '/') out[n++] = '/'; s++; out[n] = 0; continue; }   // "//" squeezed, as VD_MountPath does
++      size_t l = strcspn(s, "/"), base = n;
++      if (base + l >= cap) { strlcpy(out + n, s, cap - n); return; }
++      memcpy(out + n, s, l); n += l; out[n] = 0;
++      if (l <= 16 && memchr(s, '^', l) && !fs->exists(out))
++      {
++         char shown[17], dir[VD_PathLen], host[VD_CwdLen];
++         for (size_t i = 0; i < l; i++) shown[i] = (char)VD_ToPetscii(s[i]);   // the C64 spelling: upper-case letters
++         shown[l] = 0;
++         size_t dl = base > 1 ? base - 1 : 0;                           // "/a/" -> "/a"; "/" -> "" (the root)
++         if (dl >= sizeof dir) dl = 0;
++         memcpy(dir, out, dl); dir[dl] = 0;
++         int alias = 0;
++         if (VD_CountShownIn(fs, dir, shown, host, sizeof host, &alias) == 1 && alias == 1 && base + strlen(host) < cap)
++         { strcpy(out + base, host); n = base + strlen(host); }
++      }
++      s += l;
++   }
++}
++
++// The C64 spelling of a host path: each component as the drive lists it (its alias when it has one), for "!STATE", whose first line
++// TDrive Config compares with the paths of its list (written from its browser, so in aliases).
++FLASHMEM static void VD_C64Path(const char *in, char *out, size_t cap)
++{
++   size_t n = 0;
++   out[0] = 0;
++   for (const char *s = in; *s && n + 1 < cap; )
++   {
++      if (*s == '/') { out[n++] = *s++; out[n] = 0; continue; }
++      size_t l = strcspn(s, "/");
++      char comp[VD_CwdLen], shown[17];
++      const char *w = s;
++      size_t wl = l;
++      if (l < sizeof comp)
++      {
++         memcpy(comp, s, l); comp[l] = 0;
++         if (VD_Shown(comp, shown) >= 0) { w = shown; wl = strlen(shown); }
++      }
++      if (n + wl >= cap) wl = cap - 1 - n;
++      memcpy(out + n, w, wl); n += wl; out[n] = 0;
++      s += l;
++   }
 +}
 +
 +// The host path for a C64 name in the unit's folder: the name itself or, when that does not exist, the entry it is the alias of.
@@ -896,9 +954,9 @@ index 0000000..c9bca58
 +   stcVDUnit *u = &vdUnit[unit];
 +   if (kind == VD_HF_STATE)
 +   {
-+      char path[VD_PathLen];
++      char host[VD_PathLen], path[VD_PathLen];
 +      path[0] = 0;
-+      if (u->mounted) VD_HostPath(u, u->imgName, path, sizeof path);
++      if (u->mounted) { VD_HostPath(u, u->imgName, host, sizeof host); VD_C64Path(host, path, sizeof path); }   // aliases, as the browser showed them
 +      hfTextLen = snprintf(hfText, sizeof hfText, "%s\n%s\n", path, u->cwd[0] ? u->cwd : "/");
 +      if (hfTextLen > sizeof hfText - NumColorRefs - 2) hfTextLen = sizeof hfText - NumColorRefs - 2;
 +      for (int i = 0; i < NumColorRefs; i++) hfText[hfTextLen++] = "0123456789ABCDEF"[IO1[rwRegColorRefStart + i] & 15];
@@ -1583,11 +1641,13 @@ index 0000000..c9bca58
 +// Select the disk image for a unit: path = "/dir/IMAGE.D64" (ASCII, on that unit's own card), "" = unmount (the folder stays).
 +// Waits for a quiet moment (up to VD_SwapWaitMs, polling the mailbox meanwhile), then closes every channel on the unit and
 +// mounts, exactly as CD: would. Returns 0, or a DOS error code with a short reason in msg; 1 = no such unit, 2 = not quiet in time.
-+FLASHMEM int TDrive_RemoteSet(int unit, const char *path, char *msg, size_t cap)
++FLASHMEM int TDrive_RemoteSet(int unit, const char *aliasPath, char *msg, size_t cap)
 +{
 +   if (!VD_RemoteReady(unit)) { snprintf(msg, cap, "no such drive"); return 1; }
 +   stcVDUnit *u = &vdUnit[unit];
-+   if (path[0] && path[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
++   if (aliasPath[0] && aliasPath[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
++   char path[VD_PathLen];
++   VD_ResolvePath(u->fs, aliasPath, path, sizeof path);                 // components may be C64 aliases (THE-PU^SIDE1.D64)
 +   if (path[0])   // check the image before disturbing anything: a mistyped path must leave the current disk mounted
 +   {
 +      int r = VD_CheckImage(u->fs, path, msg, cap);
@@ -1672,9 +1732,11 @@ index 0000000..c9bca58
 +   if (!fs) { snprintf(msg, cap, "no such drive"); return 1; }
 +   char sq[VD_PathLen];
 +   if (strlen(path) >= sizeof sq) { snprintf(msg, cap, "path too long"); return 33; }
-+   strlcpy(sq, path, sizeof sq);
-+   VD_Squeeze(sq);
-+   if (sq[0] && sq[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
++   char raw[VD_PathLen];
++   strlcpy(raw, path, sizeof raw);
++   VD_Squeeze(raw);
++   if (raw[0] && raw[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
++   VD_ResolvePath(fs, raw, sq, sizeof sq);                              // components may be C64 aliases
 +   if (sq[0])
 +   {
 +      int r = VD_CheckImage(fs, sq, msg, cap);
@@ -2097,14 +2159,23 @@ index 0000000..c9bca58
 +   {
 +      char cur[VD_PathLen];
 +      VD_HostPath(u, u->imgName, cur, sizeof cur);
-+      for (int i = 0; i < n; i++) if (VD_SameImage(cur, vdCfg[i].path)) { start = (i + 1) % n; break; }
++      for (int i = 0; i < n; i++)
++      {
++         char host[VD_PathLen];                                            // TDrive Config writes aliases (THE-PU^SIDE1.D64): compare host names
++         if (VD_SameImage(cur, vdCfg[i].path)) { start = (i + 1) % n; break; }
++         if (!strchr(vdCfg[i].path, '^')) continue;
++         VD_ResolvePath(u->fs, vdCfg[i].path, host, sizeof host);
++         if (VD_SameImage(cur, host)) { start = (i + 1) % n; break; }
++      }
 +   }
 +   for (int k = 0; k < n; k++)
 +   {
 +      stcVDCfgEntry *e = &vdCfg[(start + k) % n];
-+      if (VD_CheckImage(u->fs, e->path, msg, sizeof msg)) continue;       // gone (or not an image): next one
++      char host[VD_PathLen];
++      VD_ResolvePath(u->fs, e->path, host, sizeof host);
++      if (VD_CheckImage(u->fs, host, msg, sizeof msg)) continue;          // gone (or not an image): next one
 +      uint8_t color = e->color, count = e->flashes;
-+      int r = TDrive_RemoteSet(unit, e->path, msg, sizeof msg);
++      int r = TDrive_RemoteSet(unit, host, msg, sizeof msg);
 +      if (r == 0) { VD_Trace(VDT_Mounted, (start + k) % n); VD_Flash(color, count, VD_FlashOnMs, VD_FlashOffMs); return true; }
 +      if (r == 2) break;                                                   // the C64 never let go of the drive
 +   }
@@ -5100,7 +5171,7 @@ index 0000000..442ff6a
 +#endif
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/vd_agent.h b/Source/Teensy/MinimalBoot/Common/tdrive/vd_agent.h
 new file mode 100644
-index 0000000..751a650
+index 0000000..7c0afdf
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/vd_agent.h
 @@ -0,0 +1,23 @@
@@ -5160,7 +5231,7 @@ index 0000000..71c8659
 +#endif
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/vd_kpatch.h b/Source/Teensy/MinimalBoot/Common/tdrive/vd_kpatch.h
 new file mode 100644
-index 0000000..a219efa
+index 0000000..0f9ce1b
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/vd_kpatch.h
 @@ -0,0 +1,79 @@
@@ -6124,7 +6195,7 @@ index 9bc9643..2db3509 100644
  #endif /* TEENSYROMC64_BIN_H */
 diff --git a/Source/Teensy/TRMenuFiles/ROMs/vdconfig.prg.h b/Source/Teensy/TRMenuFiles/ROMs/vdconfig.prg.h
 new file mode 100644
-index 0000000..bebd935
+index 0000000..8bfb28e
 --- /dev/null
 +++ b/Source/Teensy/TRMenuFiles/ROMs/vdconfig.prg.h
 @@ -0,0 +1,513 @@

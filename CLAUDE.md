@@ -118,6 +118,8 @@ Firmware integration and usage: `firmware/README.md`.
   TDrive+Swift+REU now shares (`IO2Hndlr_TDriveREU`). With any TDrive default, REU menu programs get it. Host tests, firmware build; **not on hardware yet**.
 * 0.9.0.33: CMD HD / sd2iec path syntax (`[n]//dir/:name`, `[n]/dir/:name`) in names, `$`, `CD`, `MD`/`RD`, `N` (`cmd_path` in `tdrive.c`, docs/DESIGN.md 36). A path before a colon is CMD (single `/` = here), after the colon or without one ours (leading `/` = root); `CD/X` changed to relative. Unit tests; VICE and hardware through VDSUITE `7`.
 * 0.9.0.47: aliases for long host names (`THE-PU^SIDE1.D64`, `vd_alias` in `d64/tdrive.c`, `VD_Resolve` in the glue; collisions are dropped, not numbered; docs/DESIGN.md 44). Unit and glue host tests; **works on a real C64 (owner, 2026-11-05)**.
+  0.9.0.74: aliases in `/tdrive-config.txt` (TDrive Config writes what its browser shows): the Alt button resolves each path component (`VD_ResolvePath`, also in remote set),
+  and `!STATE`'s first line is in aliases (`VD_C64Path`) so TDrive Config's `*` matches (docs/DESIGN.md 63). fw_host; **not on hardware**.
 * 0.9.0.48: **a TDrive KERNAL in the machine itself** (an EPROM, a MEGA65 C64 core's KERNAL file; asked for the MEGA65 by Boris Schneider-Johne; docs/DESIGN.md 45). No separate build.
   KERNAL: `vcall` writes nothing to the mailbox unless `vd_here` reads ID0 `$DE19` = `$D6` (4 tries, so a late answer does not hand a transaction to the real bus);
   hooks leave ARG in `$A7` and `vcall` writes `MBX_ARG` after the check; `open_named` checks before filling the window/LEN. Reason beyond speed: under the TR menu's handler

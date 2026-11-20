@@ -1365,3 +1365,27 @@ BASIC; a candidate for an upstream issue.
 Tested: `tests/fw_host` (its `CloseDMA` stub now releases only on a cycle `fBusSnoop` declines; a blank-bus DMA LOAD passes with the
 fix and a plain `CloseDMA` fails there). **On hardware (owner, 2026-11-16, C128 in C64 mode):** q4k's loads work, the longest DMA is
 2319 µs, the Alt-button flash works.
+
+## 63. Aliases in the Alt-button list and TDrive Config's `*` (0.9.0.74; host tests; not on hardware)
+
+Reported by the owner: an image picked in TDrive Config whose host name has an alias (section 44, `THE-PU^SIDE1.D64`) never got its `*` (mounted)
+in the list, and the Alt button skipped it. TDrive Config's browser lists folders with `$/path/`, so it sees, and writes into `/tdrive-config.txt`,
+the C64 spelling: `/long folder^name/the-pu^side1.d64`. Two places took that line as a host path:
+
+- **The Alt button** (`VD_SwitchNext`) checked each entry with `VD_CheckImage`, a plain `open()` on the card: no such file, so the entry was skipped as gone;
+  and it found the current image in the list by comparing its host path with the entries, which never matched an alias.
+- **`!STATE`**'s first line, which TDrive Config compares byte for byte with its entries to draw the `*`, gave the host path (`/LONG FOLDER WITH A LONG NAME/THE-PUMPKINS-...`).
+
+Fixes, all in the glue (`firmware/IOH_TDrive.c`):
+
+- `VD_ResolvePath(fs, path)` turns a whole host path whose components may be aliases into the host path, component by component (folders too): a component
+  that does not exist as written and holds a `^` is looked up with `VD_CountShownIn` (the folder scan of `VD_CountShown`, now for any folder of any file system),
+  and replaced by the one entry it is the alias of. The same rules as `VD_Resolve`: the real name wins, a dropped (colliding) alias stays unresolved. Paths without
+  a `^` cost nothing. Used by the Alt button (the check, the mount and, for entries with a `^`, the search for the current image), by `TDrive_RemoteSet`
+  (so `trvdrive` set takes alias paths as well) and by `TDrive_RemoteIdleSet` (the sidecar is written with the host path).
+- `!STATE` gives the mounted image's path in the C64 spelling (`VD_C64Path`: each component through `VD_Shown`, the listing's own rule), so it equals what
+  TDrive Config's browser wrote. The second line (the folder) stays the host path; TDrive Config does not read it. The sidecar, remote get and the trace keep host paths.
+
+Not covered: a list written by hand with the long host names shows them, and they mount (no `^`, plain paths), but TDrive Config draws no `*` for them,
+since `!STATE` now gives the alias. `tests/fw_host`: an Alt-button list in aliases (mount, the next entry from the mounted one, wrap), a colliding alias not mounted,
+a remote set by an alias path, `!STATE` in aliases.

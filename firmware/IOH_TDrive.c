@@ -147,10 +147,10 @@ FLASHMEM static int VD_Shown(const char *host, char out[17])   // 0 = real name,
    return vd_alias(host, out);
 }
 
-// How many entries of the unit's folder show as `shown`; the host name of the last one goes to host (if given).
-FLASHMEM static int VD_CountShown(stcVDUnit *u, const char *shown, char *host, size_t cap, int *alias)
+// How many entries of folder dir (host path, "" = root) show as `shown`; the host name of the last one goes to host (if given).
+FLASHMEM static int VD_CountShownIn(FS *fs, const char *dir, const char *shown, char *host, size_t cap, int *alias)
 {
-   File d = u->fs->open(u->cwd[0] ? u->cwd : "/");
+   File d = fs->open(dir[0] ? dir : "/");
    if (!d) return 0;
    int n = 0;
    while (File e = d.openNextFile())
@@ -162,6 +162,64 @@ FLASHMEM static int VD_CountShown(stcVDUnit *u, const char *shown, char *host, s
    }
    d.close();
    return n;
+}
+
+FLASHMEM static int VD_CountShown(stcVDUnit *u, const char *shown, char *host, size_t cap, int *alias)
+{
+   return VD_CountShownIn(u->fs, u->cwd, shown, host, cap, alias);
+}
+
+// A whole host path (ASCII, from /tdrive-config.txt or a remote set) whose components may be C64 aliases: TDrive Config writes the
+// names its browser showed, e.g. "/long folder^name/the-pu^side1.d64". Every component that does not exist as written and holds a
+// '^' becomes the host name it is the alias of (when exactly one entry shows as it); anything else is copied unchanged.
+FLASHMEM static void VD_ResolvePath(FS *fs, const char *in, char *out, size_t cap)
+{
+   size_t n = 0;
+   out[0] = 0;
+   for (const char *s = in; *s && n + 1 < cap; )
+   {
+      if (*s == '/') { if (!n || out[n - 1] != '/') out[n++] = '/'; s++; out[n] = 0; continue; }   // "//" squeezed, as VD_MountPath does
+      size_t l = strcspn(s, "/"), base = n;
+      if (base + l >= cap) { strlcpy(out + n, s, cap - n); return; }
+      memcpy(out + n, s, l); n += l; out[n] = 0;
+      if (l <= 16 && memchr(s, '^', l) && !fs->exists(out))
+      {
+         char shown[17], dir[VD_PathLen], host[VD_CwdLen];
+         for (size_t i = 0; i < l; i++) shown[i] = (char)VD_ToPetscii(s[i]);   // the C64 spelling: upper-case letters
+         shown[l] = 0;
+         size_t dl = base > 1 ? base - 1 : 0;                           // "/a/" -> "/a"; "/" -> "" (the root)
+         if (dl >= sizeof dir) dl = 0;
+         memcpy(dir, out, dl); dir[dl] = 0;
+         int alias = 0;
+         if (VD_CountShownIn(fs, dir, shown, host, sizeof host, &alias) == 1 && alias == 1 && base + strlen(host) < cap)
+         { strcpy(out + base, host); n = base + strlen(host); }
+      }
+      s += l;
+   }
+}
+
+// The C64 spelling of a host path: each component as the drive lists it (its alias when it has one), for "!STATE", whose first line
+// TDrive Config compares with the paths of its list (written from its browser, so in aliases).
+FLASHMEM static void VD_C64Path(const char *in, char *out, size_t cap)
+{
+   size_t n = 0;
+   out[0] = 0;
+   for (const char *s = in; *s && n + 1 < cap; )
+   {
+      if (*s == '/') { out[n++] = *s++; out[n] = 0; continue; }
+      size_t l = strcspn(s, "/");
+      char comp[VD_CwdLen], shown[17];
+      const char *w = s;
+      size_t wl = l;
+      if (l < sizeof comp)
+      {
+         memcpy(comp, s, l); comp[l] = 0;
+         if (VD_Shown(comp, shown) >= 0) { w = shown; wl = strlen(shown); }
+      }
+      if (n + wl >= cap) wl = cap - 1 - n;
+      memcpy(out + n, w, wl); n += wl; out[n] = 0;
+      s += l;
+   }
 }
 
 // The host path for a C64 name in the unit's folder: the name itself or, when that does not exist, the entry it is the alias of.
@@ -525,9 +583,9 @@ FLASHMEM static int VD_HfOpen(void *ctx, int unit, int kind, int write)
    stcVDUnit *u = &vdUnit[unit];
    if (kind == VD_HF_STATE)
    {
-      char path[VD_PathLen];
+      char host[VD_PathLen], path[VD_PathLen];
       path[0] = 0;
-      if (u->mounted) VD_HostPath(u, u->imgName, path, sizeof path);
+      if (u->mounted) { VD_HostPath(u, u->imgName, host, sizeof host); VD_C64Path(host, path, sizeof path); }   // aliases, as the browser showed them
       hfTextLen = snprintf(hfText, sizeof hfText, "%s\n%s\n", path, u->cwd[0] ? u->cwd : "/");
       if (hfTextLen > sizeof hfText - NumColorRefs - 2) hfTextLen = sizeof hfText - NumColorRefs - 2;
       for (int i = 0; i < NumColorRefs; i++) hfText[hfTextLen++] = "0123456789ABCDEF"[IO1[rwRegColorRefStart + i] & 15];
@@ -1212,11 +1270,13 @@ FLASHMEM static int VD_CheckImage(FS *fs, const char *path, char *msg, size_t ca
 // Select the disk image for a unit: path = "/dir/IMAGE.D64" (ASCII, on that unit's own card), "" = unmount (the folder stays).
 // Waits for a quiet moment (up to VD_SwapWaitMs, polling the mailbox meanwhile), then closes every channel on the unit and
 // mounts, exactly as CD: would. Returns 0, or a DOS error code with a short reason in msg; 1 = no such unit, 2 = not quiet in time.
-FLASHMEM int TDrive_RemoteSet(int unit, const char *path, char *msg, size_t cap)
+FLASHMEM int TDrive_RemoteSet(int unit, const char *aliasPath, char *msg, size_t cap)
 {
    if (!VD_RemoteReady(unit)) { snprintf(msg, cap, "no such drive"); return 1; }
    stcVDUnit *u = &vdUnit[unit];
-   if (path[0] && path[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
+   if (aliasPath[0] && aliasPath[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
+   char path[VD_PathLen];
+   VD_ResolvePath(u->fs, aliasPath, path, sizeof path);                 // components may be C64 aliases (THE-PU^SIDE1.D64)
    if (path[0])   // check the image before disturbing anything: a mistyped path must leave the current disk mounted
    {
       int r = VD_CheckImage(u->fs, path, msg, cap);
@@ -1301,9 +1361,11 @@ FLASHMEM int TDrive_RemoteIdleSet(int unit, const char *path, char *msg, size_t 
    if (!fs) { snprintf(msg, cap, "no such drive"); return 1; }
    char sq[VD_PathLen];
    if (strlen(path) >= sizeof sq) { snprintf(msg, cap, "path too long"); return 33; }
-   strlcpy(sq, path, sizeof sq);
-   VD_Squeeze(sq);
-   if (sq[0] && sq[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
+   char raw[VD_PathLen];
+   strlcpy(raw, path, sizeof raw);
+   VD_Squeeze(raw);
+   if (raw[0] && raw[0] != '/') { snprintf(msg, cap, "path must start with /"); return 33; }
+   VD_ResolvePath(fs, raw, sq, sizeof sq);                              // components may be C64 aliases
    if (sq[0])
    {
       int r = VD_CheckImage(fs, sq, msg, cap);
@@ -1726,14 +1788,23 @@ FLASHMEM static bool VD_SwitchNext(int unit)
    {
       char cur[VD_PathLen];
       VD_HostPath(u, u->imgName, cur, sizeof cur);
-      for (int i = 0; i < n; i++) if (VD_SameImage(cur, vdCfg[i].path)) { start = (i + 1) % n; break; }
+      for (int i = 0; i < n; i++)
+      {
+         char host[VD_PathLen];                                            // TDrive Config writes aliases (THE-PU^SIDE1.D64): compare host names
+         if (VD_SameImage(cur, vdCfg[i].path)) { start = (i + 1) % n; break; }
+         if (!strchr(vdCfg[i].path, '^')) continue;
+         VD_ResolvePath(u->fs, vdCfg[i].path, host, sizeof host);
+         if (VD_SameImage(cur, host)) { start = (i + 1) % n; break; }
+      }
    }
    for (int k = 0; k < n; k++)
    {
       stcVDCfgEntry *e = &vdCfg[(start + k) % n];
-      if (VD_CheckImage(u->fs, e->path, msg, sizeof msg)) continue;       // gone (or not an image): next one
+      char host[VD_PathLen];
+      VD_ResolvePath(u->fs, e->path, host, sizeof host);
+      if (VD_CheckImage(u->fs, host, msg, sizeof msg)) continue;          // gone (or not an image): next one
       uint8_t color = e->color, count = e->flashes;
-      int r = TDrive_RemoteSet(unit, e->path, msg, sizeof msg);
+      int r = TDrive_RemoteSet(unit, host, msg, sizeof msg);
       if (r == 0) { VD_Trace(VDT_Mounted, (start + k) % n); VD_Flash(color, count, VD_FlashOnMs, VD_FlashOffMs); return true; }
       if (r == 2) break;                                                   // the C64 never let go of the drive
    }
