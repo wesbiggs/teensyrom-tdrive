@@ -131,7 +131,8 @@ Firmware integration and usage: `firmware/README.md`.
   Banner area 312 of 314 bytes. py65 (`test_banner.py`), `tests/fw_host`; **not on hardware**. Note: RAM does not survive a MEGA65 reset (Boris), but a launch is no reset.
 * 0.9.0.50: TDrive Config's browser lists folders in 128-byte blocks (`fopen`/`fget`/`mcall` in `util/vdconfig.s`: `FLOAD_OPEN` with the `$/path/` name in the window, then `FLOAD_BLK` until EOI;
   `rdb` picks `fget` or `CHRIN`), falling back to `OPEN` + `CHRIN` when not answered (`$A5`, `$3C`, time-out, a name of 128+). Reported slow by Boris (MEGA65, a full card; CBM FileBrowser, which uses `LOAD`, was fast).
-  `tests/c64_sim.py` answers the two commands from the drive model (`fast=False`: not mine); `test_vdconfig.py` block/fallback/big-folder/error cases. PRG ends at `$1FA3` (BSS `$2000`). **Not on hardware.**
+  `tests/c64_sim.py` answers the two commands from the drive model (`fast=False`: not mine); `test_vdconfig.py` block/fallback/big-folder/error cases. PRG ends at `$1FA3` (BSS `$2000`; since 0.9.0.74 `$2089`, BSS `$2200`). **Not on hardware.**
+* 0.9.0.74: **TDrive Config under the agent** (plain TR; "TDrive Agent" on the TR+; docs/DESIGN.md 63): it read the KERNAL build's `$DE16` (the agent's code there) and said "not active" (beta tester comicbookman). `findmb` picks the registers by their ID bytes (`$DE19/$DE1A` or `$DF09/$DF0A`), every register operand goes through `MREG` (patched at start), and under the agent `agscan` runs the bus scan before the numbers are read. py65 (`c64_sim.py` `layout=`/`real=`); **not on hardware**. VDCOPY still reads `$DE16` only.
 * **DMATEST** (docs/DESIGN.md 48): can the TR+ DMA-write C64 RAM while our KERNAL is served (the question behind a DMA LOAD)? The source says yes (the ISR skips `fBusSnoop` during a transfer;
   `KernalCheck` asserts `/GAME` only on CPU reads). `DMATEST` on the test disk waits while `tools/dmatest.py -H <ip>` writes 28.4 KB a round with `WriteC64Mem` (needs teensyrom-rcp's `trlib.py`),
   then checks every byte (under ROM too), three guard pages and the served KERNAL's sum. py65 (`make test-dmatest`); **passes on a C128 in C64 mode (owner, 2026-11-08; not yet on a C64)**:
@@ -282,7 +283,7 @@ d64/            portable C99 library, also compiled as C++ by the firmware (keep
   tdrive_vec.c/.h the vector engine (plain TR, TDrive Agent, C128 128 mode): answers the agent (vector/vdagent.s), OPEN..SAVE and the file table in C (vvec_poll); vv_kernal[] = the C64 / C128 KERNAL profiles
   vd_cfg.h        build knobs: VD_COLD (FLASHMEM), VD_NSLOT, VD_DEV0/VD_DEV1 defaults
 util/            VDCOPY: vdcopy.s (all machine code, BASIC SYS stub at $0801, tables BSS at $2800; tools/make_util.py assembles it);
-                TDrive Config: vdconfig.s (all machine code, same stub/BSS scheme, BSS $2000-$4FFF; tools/make_util.py assembles it into build/util/"TDrive Config.prg")
+                TDrive Config: vdconfig.s (all machine code, same stub/BSS scheme, BSS $2200-$51FF; both register layouts (findmb); tools/make_util.py assembles it into build/util/"TDrive Config.prg")
 vector/         the plain-TeensyROM agent: vdagent.s (6502, docs/DESIGN.md 53), agent.cfg (PRG at ld65 -S; VICE build at $DE08 in GeoRAM)
 patches/        ca65 sources overlaid on the stock KERNAL by tools/build.py; segment name P_XXXX = load address
   tdrive.s        serial entry hooks, fast LOAD / VERIFY ($F4C8, window or DMA) / SAVE ($F605, window or DMA), bus scan, code placed in reclaimed tape space $F8E2-$FB8D (643 of 683 bytes used; the mailbox gate `vd_here` included, the build asserts the limit);

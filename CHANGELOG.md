@@ -2,6 +2,16 @@
 
 ## v0.9.0.74
 
+### Fixed
+- **TDrive Config works on the plain TeensyROM (and with "TDrive Agent" on the TR+).** Started from the TR menu, it said "TDrive is
+  not active. Start this program from the TeensyROM menu with the TDrive KERNAL." (first reported by beta tester comicbookman, the
+  first plain-TR user). It looked for the drive's registers only where the TR+ KERNAL build has them (`$DE10`); under the agent
+  they are at `$DF00`, and `$DE16` reads the agent's own code. It now finds them by their ID bytes (`$DE19/$DE1A` or `$DF09/$DF0A`) and
+  writes nothing to IO before it has found them. Under the agent it also does the bus scan itself before reading the device numbers, so
+  with a real drive at 8 it opens the SD unit on its real number (9), not the drive's. The message now says "with a TDrive Special
+  IO". Every agent build had the bug (since 0.9.0.58). py65 (`tests/test_vdconfig.py`, both layouts, with and without real drives);
+  **not on hardware**. `docs/DESIGN.md` section 63.
+
 ### Build
 - The GitHub repository is now `wesbiggs/teensyrom-tdrive` (was `teensyrom-vdrive`; GitHub redirects the old URL). The README's
   install line, the build tools and the comments the patch carries into the TeensyROM tree use the new name. No firmware change.

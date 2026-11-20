@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build build/util/vdcopy.prg from util/vdcopy.s and "build/util/TDrive Config.prg" from util/vdconfig.s (both all machine code, loading at
-$0801 with a BASIC SYS stub; their tables are BSS, not in the PRG: from $2800 for VDCOPY, $2000 for TDrive Config).
+$0801 with a BASIC SYS stub; their tables are BSS, not in the PRG: from $2800 for VDCOPY, $2200 for TDrive Config).
 
 usage: make_util.py [OUTDIR]       (needs ca65/ld65)
 build(outdir) returns the path of the VDCOPY PRG (also used by make_testdisk.py and tdrive_mock.py); build_config(outdir) the other one.
@@ -14,7 +14,7 @@ def _asm(out, name, bss_size, prg_name=None, bss=0x2000, defs=()):
     obj, cfg, prg = out / (name + ".o"), out / (name + ".cfg"), out / (prg_name or name + ".prg")
     cfg.write_text("MEMORY { LA: start=$07FF, size=2, file=%%O; M: start=$0801, size=$%04X, file=%%O;\n"
                    "         B: start=$%04X, size=$%04X, file=\"\"; }\n"
-                   "SEGMENTS { LOADADDR: load=LA, type=ro; BASIC: load=M, type=ro; CODE: load=M, type=ro; BSS: load=B, type=bss; }\n" % (bss - 0x0801, bss, bss_size))
+                   "SEGMENTS { LOADADDR: load=LA, type=ro; BASIC: load=M, type=ro; CODE: load=M, type=ro; MRT: load=M, type=ro, optional=yes; BSS: load=B, type=bss; }\n" % (bss - 0x0801, bss, bss_size))
     subprocess.run(["ca65", "-g", *[a for d in defs for a in ("-D", d)], "-o", str(obj), str(root / "util" / (name + ".s"))], check=True)
     subprocess.run(["ld65", "-C", str(cfg), "-Ln", str(out / (name + ".lbl")), "-o", str(prg), str(obj)], check=True)
     return prg
@@ -31,7 +31,7 @@ def build(out, mock=False):
     return _asm(out, "vdcopy", 0x1800, bss=0x2800, defs=["DEV0REG=$C806"] if mock else ())
 
 def build_config(out):
-    return _asm(out, "vdconfig", 0x3000, "TDrive Config.prg")
+    return _asm(out, "vdconfig", 0x3000, "TDrive Config.prg", bss=0x2200)
 
 if __name__ == "__main__":
     out = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build" / "util"
