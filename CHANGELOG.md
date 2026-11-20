@@ -2,9 +2,16 @@
 
 ## v0.9.0.74
 
+### Fixed
+- **Images with long names (shown as aliases like `THE-PU^SIDE1.D64`) in TDrive Config's list and on the Alt button.** TDrive Config writes the
+  names its browser shows, i.e. the aliases, into `/tdrive-config.txt`; the Alt button looked for those names on the card as they were, so it skipped
+  such an entry as missing, and TDrive Config never drew the `*` (mounted) next to it. The firmware now finds the host file (and folder) of each alias
+  in a list entry, and the drive reports the mounted image to TDrive Config in the same alias spelling. `trvdrive` set takes alias paths too. Every version
+  with aliases (0.9.0.47-0.9.0.73) had the bug. Host test; **not on hardware yet**. `docs/DESIGN.md` section 63.
+
 ### Build
 - The GitHub repository is now `wesbiggs/teensyrom-tdrive` (was `teensyrom-vdrive`; GitHub redirects the old URL). The README's
-  install line, the build tools and the comments the patch carries into the TeensyROM tree use the new name. No firmware change.
+  install line, the build tools and the comments the patch carries into the TeensyROM tree use the new name (no behaviour change of its own).
 
 ## v0.9.0.73
 

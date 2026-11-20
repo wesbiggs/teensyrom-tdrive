@@ -1085,6 +1085,20 @@ int main(int argc, char **argv)
         tap(1); t = run(5000);
         check("alt: wraps around to the first entry", cur(0) == "/game.d64" && seq_ok(t, 3, 2));
 
+        // a list written by TDrive Config holds the names its browser showed: aliases of long host names, folders included
+        put(SD, "tdrive-config.txt", "/long folder^name/the-pu^side1.d64,4,1\n/long folder^name/the-pu^side2.d64,5,1\n");
+        const std::string side = "/long folder with a long name/the-pumpkins-breadbin-of-horror-side";
+        tap(1); t = run(3000);
+        check("alt: an alias path mounts the host image (side 1)", cur(0) == side + "1.d64" && seq_ok(t, 4, 1));
+        tap(1); t = run(3000);
+        check("alt: the mounted image is found in the list by its alias: next is side 2", cur(0) == side + "2.d64" && seq_ok(t, 5, 1));
+        tap(1); t = run(3000);
+        check("alt: ... and back to side 1", cur(0) == side + "1.d64" && seq_ok(t, 4, 1));
+        put(SD, "tdrive-config.txt", "/LONG FOLDER^NAME/COLLID^SIDE1.PRG,4,1\n");
+        tap(1); t = run(5000);
+        check("alt: a dropped (colliding) alias is not mounted", cur(0) == side + "1.d64");
+        { char m[64]; check("remote set by an alias path", TDrive_RemoteSet(0, "/LONG FOLDER^NAME/THE-PU^SIDE2.D64", m, sizeof m) == 0 && cur(0) == side + "2.d64"); }
+
         // the mounted image is not in the list: start again at the first entry
         put(SD, "tdrive-config.txt", "/SUB/INNER.D64,7,1\n/BIG.D81,8,1\n");
         tap(1); t = run(3000);
@@ -1183,6 +1197,10 @@ int main(int argc, char **argv)
             cmd15("CD:/SUB/INNER.D64"); status15();
             open_ch(2, "!STATE"); back = read_ch(2); close_ch(2);
             check("host file: !STATE shows the mounted image and its folder", back == "/SUB/INNER.D64\r/SUB\r044A7ED\r");
+            cmd15("CD:/LONG FOLDER^NAME/THE-PU^SIDE1.D64"); status15();
+            open_ch(2, "!STATE"); back = read_ch(2); close_ch(2);
+            check("host file: !STATE gives the image path in aliases, as TDrive Config's list holds it",
+                  back.rfind("/LONG FOLDER^NAME/THE-PU^SIDE1.D64\r/LONG FOLDER WITH A LONG NAME\r", 0) == 0);
             open_ch(2, "!STATE,W"); check("host file: !STATE is write protected (26)", status15().rfind("26,", 0) == 0);
             open_ch(2, "!NOPE"); check("host file: unknown name gives 62", status15().rfind("62,", 0) == 0);
             // a second host file replaces the first one
