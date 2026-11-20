@@ -39,7 +39,7 @@ PRG = build()
 
 class Sim(C64):
     def __init__(self, tdrive=True):
-        super().__init__(PRG, drive=None, mem={1: 0x37})
+        super().__init__(PRG, drive=None, mem={1: 0x37}, layout=None)   # no IDs unless tdrive (below)
         self.ram = self.mem._subject
         if tdrive:
             self.ram[0xDE19], self.ram[0xDE1A] = 0xD6, 0x64
