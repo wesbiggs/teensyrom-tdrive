@@ -1,12 +1,15 @@
 ; TDrive Config: edit the Alt-button disk lists (/tdrive-config.txt on each unit) and show / change the mounted images, entirely in machine code.
 ; Loads at $0801 with a BASIC "10 SYS 2061" stub. Talks to the drives only through the KERNAL: the "!CONFIG[,W]" and "!STATE" host text
 ; channels (docs/DESIGN.md 23), "$/folder/" listings for the browser and "CD:" on the command channel (logical file 15 for the SD unit, 14 for
-; the USB unit, open for the whole run: closing a command channel closes every channel of its unit). The only mailbox access of its own
-; is the return to the TR menu (VIO_MENU, on Q).
+; the USB unit, open for the whole run: closing a command channel closes every channel of its unit). Mailbox accesses of its own: the
+; browser's block listings (FLOAD_OPEN / FLOAD_BLK), the return to the TR menu (VIO_MENU, on Q) and, under the agent, the bus scan.
+; Two register layouts (findmb): the TR+ KERNAL build's at IO1 $DE10, the TDrive agent's (plain TR; "TDrive Agent" on the TR+) at IO2
+; $DF00, where IO1 holds the agent's code. Each is told by its ID bytes; the code is assembled for $DE10 and every register operand
+; is pointed at the one found (MREG, the MRTAB table) before the first access. Nothing is written to either without the IDs.
 ; The file is kept as text in TXT (each line ends in CR) with an index of its lines; every change rebuilds the text in NEWB (one line replaced,
 ; removed, swapped or added), copies it back, re-indexes and re-parses the entries, then writes the whole file. Lines that are not entries
 ; (comments, blank lines) stay where they are.
-; Buffers and tables are BSS at $2000-$4FFF (not in the PRG). The screen is in the lower-case character set: PS swaps the case of the
+; Buffers and tables are BSS at $2200-$51FF (not in the PRG). The screen is in the lower-case character set: PS swaps the case of the
 ; letters in its strings for that set, strings for the drive (CMDS, types) are as they are.
 ; Colours follow the TR menu: its seven colour references (background, border, banner, time, option, sources, name) come as the third
 ; line of "!STATE" (hex digits; the menu's defaults when a firmware sends no such line). Bytes C_BAN..C_NAME in a screen string select
@@ -34,13 +37,17 @@ INSRT   = $D8           ; insert count, likewise
 BORDER  = $D020
 BGCOL   = $D021
 TXTCOL  = $0286
-DEV0REG = $DE16         ; tdrive: current device number of the SD unit, $DE17 the USB unit (0 = none)
-MBXCMD  = $DE10         ; tdrive mailbox (d64/tdrive_io.h): command register ...
-MBXSTAT = $DE13         ; ... and its answer token
-MBXARG  = $DE11         ; argument (the device for the fast open)
-MBXDATA = $DE12         ; result byte (the fast open's error, a block's byte count)
-MBXST   = $DE14         ; IEC status bits of the answer ($40 EOI: the last block)
-MBXLEN  = $DE15         ; name length for the fast open
+MBXK    = $DE10         ; tdrive mailbox (d64/tdrive_io.h) of the KERNAL build; the agent's is MBXA. Operands assembled for MBXK go
+MBXA    = $DF00         ;   through MREG, which records them for findmb
+MBXCMD  = MBXK+0        ; command register ...
+MBXARG  = MBXK+1        ; argument (the device for the fast open, a free number for VIO_FREE)
+MBXDATA = MBXK+2        ; result byte (the fast open's error, a block's byte count)
+MBXSTAT = MBXK+3        ; ... and its answer token
+MBXST   = MBXK+4        ; IEC status bits of the answer ($40 EOI: the last block)
+MBXLEN  = MBXK+5        ; name length for the fast open
+DEV0REG = MBXK+6        ; current device number of the SD unit, +7 the USB unit (0 = none)
+MBXID0  = 9             ; ID registers (offsets): $D6 $64 while a TDrive handler answers
+MBXID1  = 10
 WIN     = $DF80         ; the 128-byte IO2 window: the name out, the blocks in
 WINSZ   = 128
 C_FLOPEN = 9            ; FLOAD_OPEN / FLOAD_BLK: the fast LOAD's block transfer (d64/tdrive_io.h), used for the browser's listings
@@ -48,6 +55,8 @@ C_FLBLK = 10
 STAT_NOTMINE = $A5
 STAT_SCAN = $3C
 VIO_MENU = 16           ; command: back to the TR menu (the Teensy resets the C64 into it)
+VIO_SCAN = 14           ; command: the bus scan starts (the automatic units let go of their numbers); DATA = units that need one
+VIO_FREE = 15           ; command: nobody answered at ARG; DATA = units still waiting
 STAT_OK = $5A           ; answer token: done
 
 P1      = $FB           ; inline strings
@@ -138,6 +147,21 @@ C_NAME  = 7
         .byte str, 0
 .endmacro
 
+.macro MREG op, reg, idx  ; op MBXK+reg (,idx); its operand goes into MRTAB (segment MRT), which findmb points at the registers found
+.ifblank idx
+:       op reg
+.else
+:       op reg, idx
+.endif
+        .pushseg
+        .segment "MRT"
+        .word :- + 1
+        .byte reg - MBXK
+        .popseg
+.endmacro
+
+.segment "MRT"
+MRTAB:                  ; per MREG: the operand's address, the register's offset (no global labels in the macro: they would end the @ scopes)
 .segment "LOADADDR"
         .word $0801
 .segment "BASIC"
@@ -152,8 +176,13 @@ start:
         jsr scr
         PS 14, 8                ; the lower-case character set, and Shift+C= may not switch it back
         PS "Reading config...", 13
-        ldx #1                  ; the TR menu probed the bus before the launch, so DEV0/DEV1 are already settled
-@dv:    lda DEV0REG,x
+        jsr findmb              ; which TDrive handler answers, if any
+        bcs @no2
+        bit AGENT
+        bpl @nos
+        jsr agscan              ; the agent's numbers are settled by a bus scan here (the TR+'s menu probes before the launch)
+@nos:   ldx #1
+@dv:    MREG lda, DEV0REG, x
         cmp #8
         bcc @no
         cmp #31
@@ -165,9 +194,9 @@ start:
         lda DEVS
         ora DEVS+1
         bne @act
-        lda #255
+@no2:   lda #255
         sta FLDN
-        PS "TDrive is not active.", 13, "Start this program from the TeensyROM menu with the TDrive KERNAL.", 13
+        PS "TDrive is not active.", 13, "Start this program from the TeensyROM menu with a TDrive Special IO.", 13
         rts
 @act:   lda BORDER
         and #15
@@ -238,13 +267,13 @@ quit:   lda #15
         jsr CLRCHN
         sei                     ; nothing from the KERNAL while the Teensy writes to the card
         lda #VIO_MENU
-        sta MBXCMD
+        MREG sta, MBXCMD
         ldx #0
         ldy #0
-@w:     lda MBXSTAT             ; BUSY until answered; read twice, as the KERNAL does (a late answer gives a mixed byte)
+@w:     MREG lda, MBXSTAT       ; BUSY until answered; read twice, as the KERNAL does (a late answer gives a mixed byte)
         cmp #STAT_OK
         bne @n
-        cmp MBXSTAT
+        MREG cmp, MBXSTAT
         beq @ok
 @n:     dex
         bne @w
@@ -496,12 +525,103 @@ perr:   jsr msgbeg
 ; The KERNAL's fast LOAD reads files 128 bytes per round trip through the IO2 window (FLOAD_OPEN, then FLOAD_BLK until EOI); the
 ; browser asks for its listings the same way (fopen / fget) and falls back to OPEN + CHRIN when that is not answered.
 
+; Which registers: the KERNAL build's ($DE10) when $DE19/$DE1A read $D6 $64, else the agent's ($DF00) when $DF09/$DF0A do. Reads only
+; until then: under the agent IO1 is its code (the handler keeps writes there), under the TR menu's own handler $DE11 / $DE15 are
+; EEPROM-backed settings. A few tries, as the KERNAL's vd_here does (a late answer reads a mixed byte).
+; C=0 found: every MREG operand points at it, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
+findmb: ldx #4
+@try:   lda MBXK+MBXID0
+        cmp #$D6
+        bne @a
+        lda MBXK+MBXID1
+        cmp #$64
+        bne @a
+        lda #<MBXK
+        ldx #>MBXK
+        ldy #0
+        beq @set
+@a:     lda MBXA+MBXID0
+        cmp #$D6
+        bne @n
+        lda MBXA+MBXID1
+        cmp #$64
+        bne @n
+        lda #<MBXA
+        ldx #>MBXA
+        ldy #$80
+        bne @set
+@n:     dex
+        bne @try
+        sec
+        rts
+@set:   sty AGENT
+        sta MRLO
+        stx MRHI
+        ldx #0
+@fix:   cpx #MRTABN
+        beq @done
+        lda MRTAB,x             ; P2 = the operand's address
+        sta P2
+        lda MRTAB+1,x
+        sta P2+1
+        lda MRTAB+2,x           ; base + register (no carry: the registers are within the base's first 16 bytes)
+        clc
+        adc MRLO
+        ldy #0
+        sta (P2),y
+        iny
+        lda MRHI
+        sta (P2),y
+        inx
+        inx
+        inx
+        bne @fix
+@done:  clc
+        rts
+
+; The agent's bus scan, as the KERNAL's bus_scan (patches/vcall.inc) does it: which numbers are free on the real serial bus, probed with
+; LISTEN + SECOND (the stock routines: the agent hooks only the vectored calls). Otherwise the agent's engine would scan at the first
+; OPEN, after this program had read DEV0/DEV1, and that OPEN could reach a real drive on the number the unit gave up.
+agscan: lda #VIO_SCAN
+        jsr mcall
+        bcs @out                ; not answered
+        cmp #0
+        beq @out                ; no unit needs a number
+        lda #8
+        sta SDV
+@p:     lda #0
+        sta STATUS
+        lda SDV
+        jsr LISTEN
+        lda STATUS
+        bmi @free               ; nothing on the bus at all
+        lda #$6F
+        jsr SECOND
+        lda STATUS
+        bmi @free
+        jsr UNLSN               ; a real device is there
+@nx:    inc SDV
+        lda SDV
+        cmp #31
+        bcc @p
+@out:   lda #0
+        sta STATUS
+        rts
+@free:  lda SDV
+        MREG sta, MBXARG
+        lda #VIO_FREE
+        jsr mcall
+        bcs @out
+        cmp #0
+        bne @nx                 ; a unit still needs a number
+        beq @out
+
 ; one mailbox command A: C=0 answered (A = DATA, MST = ST), C=1 not (not mine, a bus-scan request, or no answer in about a second)
-mcall:  sta MBXCMD
+mcall:  MREG sta, MBXCMD
         lda #0
         sta MW0
         sta MW1
-@w:     lda MBXSTAT
+@w:     MREG lda, MBXSTAT
         cmp #STAT_OK
         beq @ok
         cmp #STAT_NOTMINE
@@ -514,12 +634,12 @@ mcall:  sta MBXCMD
         bne @w
 @no:    sec
         rts
-@ok:    lda MBXST               ; each answer byte read twice in a row until two agree, as the KERNAL does
-        cmp MBXST
+@ok:    MREG lda, MBXST         ; each answer byte read twice in a row until two agree, as the KERNAL does
+        MREG cmp, MBXST
         bne @ok
         sta MST
-@d:     lda MBXDATA
-        cmp MBXDATA
+@d:     MREG lda, MBXDATA
+        MREG cmp, MBXDATA
         bne @d
         clc
         rts
@@ -539,9 +659,9 @@ fopen:  lda #0
         iny
         cpy CMDLEN
         bne @nm
-        sty MBXLEN
+        MREG sty, MBXLEN
         lda DV
-        sta MBXARG
+        MREG sta, MBXARG
         lda #C_FLOPEN
         jsr mcall
         bcs @no
@@ -2430,8 +2550,13 @@ bdraw:  ldx #3
         jmp fpad
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
+.segment "MRT"
+MRTEND:
+MRTABN = MRTEND - MRTAB
+.assert MRTABN < 256, error, "MRTAB too long for findmb"
+
 .segment "BSS"
-TXT:    .res 4096               ; the file ($2000, page aligned: putc checks pages)
+TXT:    .res 4096               ; the file ($2200, page aligned: putc checks pages)
 NEWB:   .res 4096               ; the file being rebuilt
 MPB:    .res 256                ; the mounted images, 128 bytes per unit (page aligned: mpptr adds 128 to the low byte)
 .assert <TXT = 0 && <NEWB = 0 && <MPB = 0, error, "TXT, NEWB and MPB must be page aligned"
@@ -2456,6 +2581,10 @@ LINE:   .res 64
 ERRBUF: .res 48
 DIGS:   .res 3
 DEVS:   .res 2
+AGENT:  .res 1                  ; $80: the agent's registers (findmb)
+MRLO:   .res 1
+MRHI:   .res 1
+SDV:    .res 1                  ; agscan: the number being probed
 MPL:    .res 2
 TLEN:   .res 2
 TEND:   .res 2

@@ -8,6 +8,20 @@
   such an entry as missing, and TDrive Config never drew the `*` (mounted) next to it. The firmware now finds the host file (and folder) of each alias
   in a list entry, and the drive reports the mounted image to TDrive Config in the same alias spelling. `trvdrive` set takes alias paths too. Every version
   with aliases (0.9.0.47-0.9.0.73) had the bug. Host test; **not on hardware yet**. `docs/DESIGN.md` section 63.
+- **TDrive Config works on the plain TeensyROM (and with "TDrive Agent" on the TR+).** Started from the TR menu, it said "TDrive is
+  not active. Start this program from the TeensyROM menu with the TDrive KERNAL." (first reported by beta tester comicbookman, the
+  first plain-TR user). It looked for the drive's registers only where the TR+ KERNAL build has them (`$DE10`); under the agent
+  they are at `$DF00`, and `$DE16` reads the agent's own code. It now finds them by their ID bytes (`$DE19/$DE1A` or `$DF09/$DF0A`) and
+  writes nothing to IO before it has found them. Under the agent it also does the bus scan itself before reading the device numbers, so
+  with a real drive at 8 it opens the SD unit on its real number (9), not the drive's. The message now says "with a TDrive Special
+  IO". Every agent build had the bug (since 0.9.0.58). py65 (`tests/test_vdconfig.py`, both layouts, with and without real drives);
+  **not on hardware**. `docs/DESIGN.md` section 64.
+- **VDCOPY sees the SD and USB units on the plain TeensyROM (and with "TDrive Agent" on the TR+).** It read the device numbers at the
+  TR+ KERNAL build's `$DE16/$DE17`, which under the agent is the agent's own code, so it showed no TDrive unit and picked its defaults and
+  its "is this a TDrive unit" decisions (whole-disk copy: `CD:`/`N:` on a TDrive source or destination) as if there were none. It now finds
+  the registers by their ID bytes as TDrive Config does, and under the agent runs the bus scan before reading the numbers (a real drive at 8:
+  the SD unit is 9, as the drive will answer). Every agent build had the bug (since 0.9.0.58). py65 (`tests/test_vdcopy.py`: the agent with
+  a real drive at 8 and a disk copy onto it, the agent on an empty bus, no handler); **not on hardware**. `docs/DESIGN.md` section 65.
 
 ### Build
 - The GitHub repository is now `wesbiggs/teensyrom-tdrive` (was `teensyrom-vdrive`; GitHub redirects the old URL). The README's
