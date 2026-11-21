@@ -269,7 +269,7 @@ Limits: nothing flashes under a program that masks the KERNAL IRQ or replaces it
 * `OPEN n,d,n,"!STATE"` (read only; `,W` gives 26) returns three lines: the mounted image's path (empty when none), the folder, and (since 0.9.0.40) the TR menu's seven colour references as hex digits (`IO1[rwRegColorRefStart..+6]`, which the Teensy keeps after the menu hands over to the TDrive handler: background, border, banner, time, option, sources, name; `044A7ED` with the menu's defaults).
 Text crosses as PETSCII with CR line ends; the glue converts to ASCII with LF (a CRLF file reads with single CRs). The channels move 64-byte chunks (`VD_HFBUF`); a read flags EOI on the very last byte (the next chunk is fetched one byte early). The host keeps one such file open at a time: opening another closes the first. File names go through the same upper/lower mapping as paths (section 14), so a list saved by the program has lower-case paths (FAT does not care).
 
-**The program.** `util/vdconfig.s` is machine code (first written in BASIC V2, rewritten because reading the list and the browser listings byte by byte through `GET#` and BASIC strings was slow): `tools/make_util.py` assembles it like VDCOPY, `make util` writes `build/util/TDrive Config.prg`, loads at `$0801` with a `SYS` stub, buffers are BSS at `$2000-$4FFF`. Run it from the TR menu with the TDrive handler. It reads the device numbers from `$DE16/$DE17`, which the TR menu's bus probe (37) settled before the launch (until 0.9.0.35 it made one bus access first so the lazy scan of 16 had run); with neither present it says so and ends. A 40-column screen: two lines showing what each drive has mounted, the current list (SD or USB) with the mounted entry marked `*`, each entry with its colour (a reverse block in that colour, plus the number) and flash count; keys: cursor up/down, RETURN mounts the entry (`CD:path`), `B` browses the card for any image and mounts it, `U` unmounts, `A` adds (browser, then colour and flashes), `E` edits (path, `?` browses for it, colour, flashes), `D` deletes (asks), `+` / `-` move an entry down / up, `T` switches between the SD and USB lists, `R` re-reads everything (the Alt button may have switched the disk), `Q` goes back to the TR menu (37). Every change to a list is written at once. Comments and other lines of the file are kept in place; only lines starting with `/` are entries. At most 32 entries and 2000 bytes (what the firmware reads). The line editor (path, colour, flashes) takes any key from 32 to 94; the left arrow cancels. The screen is in the lower-case character set (`CHR$(14)`, and `CHR$(8)` so Shift+C= cannot switch it back): paths show as they are on the card, the messages in mixed case. The `PS` macro swaps the case of the letters in its strings at assembly time (`'a'-'z'` to `$41-$5A`, `'A'-'Z'` to `$C1-$DA`); the strings for the drive (`CMDS`, the types table) are left as they are, and the types are shown in capitals by `fchu`.
+**The program.** `util/vdconfig.s` is machine code (first written in BASIC V2, rewritten because reading the list and the browser listings byte by byte through `GET#` and BASIC strings was slow): `tools/make_util.py` assembles it like VDCOPY, `make util` writes `build/util/TDrive Config.prg`, loads at `$0801` with a `SYS` stub, buffers are BSS at `$2000-$4FFF` (`$2200-$51FF` since 0.9.0.74). Run it from the TR menu with the TDrive handler. It reads the device numbers from `$DE16/$DE17` (under the agent `$DF06/$DF07`, section 63), which the TR menu's bus probe (37) settled before the launch (until 0.9.0.35 it made one bus access first so the lazy scan of 16 had run); with neither present it says so and ends. A 40-column screen: two lines showing what each drive has mounted, the current list (SD or USB) with the mounted entry marked `*`, each entry with its colour (a reverse block in that colour, plus the number) and flash count; keys: cursor up/down, RETURN mounts the entry (`CD:path`), `B` browses the card for any image and mounts it, `U` unmounts, `A` adds (browser, then colour and flashes), `E` edits (path, `?` browses for it, colour, flashes), `D` deletes (asks), `+` / `-` move an entry down / up, `T` switches between the SD and USB lists, `R` re-reads everything (the Alt button may have switched the disk), `Q` goes back to the TR menu (37). Every change to a list is written at once. Comments and other lines of the file are kept in place; only lines starting with `/` are entries. At most 32 entries and 2000 bytes (what the firmware reads). The line editor (path, colour, flashes) takes any key from 32 to 94; the left arrow cancels. The screen is in the lower-case character set (`CHR$(14)`, and `CHR$(8)` so Shift+C= cannot switch it back): paths show as they are on the card, the messages in mixed case. The `PS` macro swaps the case of the letters in its strings at assembly time (`'a'-'z'` to `$41-$5A`, `'A'-'Z'` to `$C1-$DA`); the strings for the drive (`CMDS`, the types table) are left as they are, and the types are shown in capitals by `fchu`.
 **Colours (0.9.0.40).** The program takes the TR menu's theme from the third `!STATE` line (all seven digits or none; a firmware without the line leaves the menu's defaults in `THEME`) and draws as the menu does: border and background from it, a reverse banner across row 0 (its 40th column is stored straight into screen and colour RAM, since printing it would link rows 0 and 1), keys in reverse in the option colour followed by their meaning in the sources colour (`KEY` / `KEYS` macros), labels in the sources colour, paths and names in the name colour, the cursor marks in the option colour, messages and the Alt gesture in the time colour. Screen strings select a colour with the bytes 3-7 (`C_BAN`..`C_NAME`, colour reference + 1), which `fch` turns into a store to `$0286` instead of printing; an entry's own colour block is set the same way, so the colour codes table went.
 **Inside.** The file is kept as text (`TXT`, 4 KB, lines ending in CR, at most 119 lines of 255 characters) with an index of its lines; the entries point into it. A change (one line replaced, removed, swapped with another, or added) rebuilds the text into a second buffer, copies it back, re-indexes and re-parses, then writes the whole file; over 2000 bytes it is kept on the screen but not written (`LIST TOO LONG TO SAVE`). All output goes through one routine that writes fixed-width fields (the BASIC `left$(x$+sp$,39)` padding) and clears the screen editor's quote mode after each character, so a `"` in a path cannot turn the colour codes after it into characters.
 **Browser.** Lists `$/folder/` (a listing by path leaves the mounted image alone) and parses the BASIC listing: only folders and `.D64/.D71/.D81` are shown (the host listing hides dot files; since 0.9.0.47 long names appear by their alias, section 44).
@@ -1389,3 +1389,61 @@ Fixes, all in the glue (`firmware/IOH_TDrive.c`):
 Not covered: a list written by hand with the long host names shows them, and they mount (no `^`, plain paths), but TDrive Config draws no `*` for them,
 since `!STATE` now gives the alias. `tests/fw_host`: an Alt-button list in aliases (mount, the next entry from the mounted one, wrap), a colliding alias not mounted,
 a remote set by an alias path, `!STATE` in aliases.
+
+## 64. TDrive Config under the agent (0.9.0.74; py65; not on hardware)
+
+**Report** (beta tester comicbookman, the first plain-TR user): TDrive Config from the TR menu said "TDrive is not active. Start this
+program from the TeensyROM menu with the TDrive KERNAL."
+
+**Cause.** The menu side was right: the plain TR pairs the entry with the agent (`IOH_TDriveMenu`), the PRG loader installs it, and the
+engine hands every mailbox command that is not its own to `vio_poll()`, so `!CONFIG`/`!STATE`, `FLOAD_OPEN`/`FLOAD_BLK` and `VIO_MENU`
+are all answered. But `util/vdconfig.s` had the KERNAL build's register addresses built in (`$DE10-$DE17`). Under the agent the
+registers are at IO2 `$DF00` (53) and IO1 `$DE08-$DEFF` is the agent's code: `$DE16/$DE17` read `$DE $20`, not a device number, so it
+stopped. Had they read 8-30 it would have written its commands into the agent (the handler keeps IO1 writes: the agent patches its own
+operands).
+
+**Fix** (program only, no firmware logic):
+- `findmb` reads the ID bytes, `$D6 $64` at `$DE19/$DE1A` (KERNAL build) or `$DF09/$DF0A` (agent), four tries as the KERNAL's `vd_here`.
+  Reads only until then: under the TR menu's own handler `$DE11`/`$DE15` are EEPROM-backed settings (45). Neither: "not active", with
+  "a TDrive Special IO" in the message.
+- Every register access is written `MREG op, reg` (assembled for `$DE10`); the macro puts the operand's address and the register's
+  offset into segment `MRT` (`MRTAB`), and `findmb` writes base + offset into each operand (idempotent: a second `RUN` gives the same
+  bytes). An unnamed label in the macro, not a named one: a global symbol would end the `@` scopes of the code around it.
+  `tools/build_agent.py` asserts that the agent's bytes at `$DE19/$DE1A` can never read as the KERNAL build's IDs.
+- Under the agent the device numbers are provisional until a bus scan, which the engine runs at the first OPEN with a name (53), after
+  the program would have read them; with a real drive at 8 the SD unit's provisional 8 would then have sent `OPEN 15,8,15` to the
+  1541. `agscan` runs the KERNAL's scan instead (`VIO_SCAN`, then `LISTEN` + `SECOND $6F` through the stock routines, which the agent
+  does not hook, and `VIO_FREE` for each number nobody answers at), which leaves `scan_state` 3 so the engine does not scan again.
+  On the TR+ the menu's probe (37) has settled the numbers: no scan there.
+- The PRG grew past `$2000`; the BSS moved to `$2200-$51FF` (all buffer references are by label). The PRG ends at `$2089`.
+
+Tested: `tests/c64_sim.py` models both layouts (`layout="kernal"`/`"agent"`/`None`), fails any IO write that is not a register of the
+handler, and models the agent's provisional numbers, `VIO_SCAN`/`VIO_FREE` and the engine's own scan at the first OPEN (`real`: the
+numbers a real drive answers at; an OPEN that reaches one fails). New cases: the agent on an empty bus (scan, mount, browser blocks,
+`Q` at `$DF00`), a real drive at 8 (units 9 and 10), no USB with drives at 8 and 9, and no handler (no IO write at all). The 0.9.0.73
+PRG fails all four, and the fix without `agscan` the three agent ones. **Not on hardware.** VDCOPY reads `$DE16/$DE17` the same way
+(only for its labels and defaults; it is on the test disk, not in the TR menu): not changed here (section 65).
+
+## 65. VDCOPY under the agent (0.9.0.74; py65; not on hardware)
+
+`util/vdcopy.s` had the same fault as TDrive Config (64): it took the SD/USB numbers from `$DE16/$DE17`, which under the agent read `$DE $20`
+(the agent's code), out of range, so it saw no TDrive unit: no `TDRIVE:` line, the wrong default destination, and `isvd` false for the
+SD/USB units, so a whole-disk copy treated them as real drives (no `CD:`, no `N:`). Under the agent the numbers it would read are
+also provisional (53): the engine scans at the first OPEN with a name, and VDCOPY's own `probe` (`LISTEN` + `SECOND` through the stock
+routines, which the agent does not hook) does not start it, so with a real drive at 8 the SD unit would still read 8.
+
+VDCOPY only reads the device registers, so the fix is smaller than TDrive Config's (no `MREG` table):
+- `findmb` reads the ID bytes, `$D6 $64` at `MBXK+9/+10` (`DEV0REG-6`: `$DE19/$DE1A`, the VICE mock's `$C809/$C80A` with `-D DEV0REG=$C806`)
+  or at `$DF09/$DF0A`, four tries, reads only, and leaves the base in `P1` (`$FB`, free until the copy code uses it as `PTR`). Neither:
+  no TDrive unit, whatever `$DE16` reads.
+- Under the agent `agscan` runs the scan as TDrive Config does (`VIO_SCAN`, `LISTEN` + `SECOND $6F` on 8-30, `VIO_FREE` for each number
+  nobody answers at, until DATA is 0) through `mcall`, which writes CMD/ARG and reads STAT/DATA by `(P1),y`. The engine's `scan_state`
+  is then 3: it does not scan again at the first OPEN. Under the KERNAL build the first `probe` still starts the KERNAL's own scan
+  (its `LISTEN` is hooked) and the TR menu's probe (37) has run anyway.
+- DEV0/DEV1 are read at base + 6/7 by `(P1),y`.
+
+Tested: `tests/test_vdcopy.py` with `c64_sim`'s `layout="agent"` (a new `real_open` lets an OPEN on a real number reach the test's drive,
+which plays the real 1541 there): a real drive at 8 (the SD unit becomes 9, `TDRIVE: SD UNIT 9`, then a whole-disk copy of an SD image onto
+the drive at 8), an empty bus (SD stays 8), and no handler (`layout=None`: no unit shown, no IO write). The 0.9.0.73 PRG fails all three.
+**Not on hardware**, and not in VICE under the agent (`make test-agent` does not run VDCOPY).
+

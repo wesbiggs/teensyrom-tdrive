@@ -34,8 +34,23 @@ TXTCOL  = $0286
 BORDER  = $D020
 BGCOL   = $D021
 .ifndef DEV0REG
-DEV0REG = $DE16         ; tdrive: current device number of the SD unit (0 = none), $DE17 the USB unit's (the VICE mock: -D DEV0REG=$C806)
+DEV0REG = $DE16         ; tdrive (KERNAL build): current device number of the SD unit (0 = none), $DE17 the USB unit's (the VICE mock: -D DEV0REG=$C806)
 .endif
+MBXK    = DEV0REG-6     ; the KERNAL build's mailbox (d64/tdrive_io.h): $DE10, the mock's $C800
+MBXA    = $DF00         ; the TDrive agent's (plain TR; "TDrive Agent" on the TR+; docs/DESIGN.md 53): registers at IO2, IO1 is its code
+M_CMD   = 0             ; register offsets from either base
+M_ARG   = 1
+M_DATA  = 2
+M_STAT  = 3
+M_ST    = 4
+M_DEV0  = 6             ; +7 the USB unit's
+M_ID0   = 9             ; $D6 $64 while a TDrive handler answers
+M_ID1   = 10
+VIO_SCAN = 14           ; command: the bus scan starts; DATA = units that need a number
+VIO_FREE = 15           ; command: nobody answered at ARG; DATA = units still waiting
+STAT_OK = $5A
+STAT_NOTMINE = $A5
+STAT_SCAN = $3C
 SCREEN  = $0400
 COLRAM  = $D800
 
@@ -97,17 +112,28 @@ start:
         sta OT
         PS {142, 8}             ; the upper-case character set, and Shift+C= may not switch it
         lda #8
-        jsr probe               ; the first bus access also runs the tdrive scan that numbers the units
-        ldx #1
-@dv:    lda DEV0REG,x           ; the tdrive units (0 = none or no tdrive)
+        jsr probe               ; the KERNAL build: the first bus access also runs the tdrive scan that numbers the units
+        lda #0
+        sta VD0
+        sta VD1
+        jsr findmb              ; which TDrive handler answers, if any (P1 = its registers)
+        bcs @nodv
+        bit AGENT
+        bpl @nos
+        jsr agscan              ; the agent's numbers are provisional until a bus scan, which its stock LISTEN above does not start
+@nos:   ldx #1
+        ldy #M_DEV0+1
+@dv:    lda (P1),y              ; the tdrive units (0 = none)
         cmp #8
         bcc @no
         cmp #31
         bcc @ok
 @no:    lda #0
 @ok:    sta VD0,x
+        dey
         dex
         bpl @dv
+@nodv:
         jsr readtheme
         lda THEME+1
         sta BORDER
@@ -358,6 +384,106 @@ probe:  ldx #0
 @gone:  lda #0
         sta STATUS
         pla
+        rts
+
+; Which registers: the KERNAL build's (MBXK) when its ID bytes read $D6 $64, else the agent's (MBXA) when its do. Reads only: under the
+; agent IO1 is its code, under the TR menu's own handler $DE11 / $DE15 are EEPROM-backed settings. Four tries, as the KERNAL's vd_here
+; (a late answer reads a mixed byte). C=0 found: P1 = the base, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
+findmb: ldx #4
+@try:   lda MBXK+M_ID0
+        cmp #$D6
+        bne @a
+        lda MBXK+M_ID1
+        cmp #$64
+        bne @a
+        lda #<MBXK
+        ldy #>MBXK
+        ldx #0
+        beq @set
+@a:     lda MBXA+M_ID0
+        cmp #$D6
+        bne @n
+        lda MBXA+M_ID1
+        cmp #$64
+        bne @n
+        lda #<MBXA
+        ldy #>MBXA
+        ldx #$80
+        bne @set
+@n:     dex
+        bne @try
+        sec
+        rts
+@set:   sta P1
+        sty P1+1
+        stx AGENT
+        clc
+        rts
+
+; The agent's bus scan, as TDrive Config's agscan (and the KERNAL's bus_scan) does it: VIO_SCAN, then LISTEN + SECOND on each number
+; (the stock routines: the agent hooks only the vectored calls) and VIO_FREE for each one nobody answers at, until every unit has one.
+; Otherwise the agent's engine would scan at the first OPEN, after this program had read DEV0/DEV1 (a real drive at 8 would be taken
+; for the SD unit). Needs P1 from findmb.
+agscan: lda #VIO_SCAN
+        jsr mcall
+        bcs @out                ; not answered
+        cmp #0
+        beq @out                ; no unit needs a number
+        lda #8
+        sta SDV
+@p:     lda #0
+        sta STATUS
+        lda SDV
+        jsr LISTEN
+        lda STATUS
+        bmi @free               ; nothing on the bus at all
+        lda #$6F
+        jsr SECOND
+        lda STATUS
+        bmi @free
+        jsr UNLSN               ; a real device is there
+@nx:    inc SDV
+        lda SDV
+        cmp #31
+        bcc @p
+@out:   lda #0
+        sta STATUS
+        rts
+@free:  lda SDV
+        ldy #M_ARG
+        sta (P1),y
+        lda #VIO_FREE
+        jsr mcall
+        bcs @out
+        cmp #0
+        bne @nx                 ; a unit still needs a number
+        beq @out
+
+; one mailbox command A at P1: C=0 answered (A = DATA), C=1 not (not mine, a bus-scan request, or no answer in about a second)
+mcall:  ldy #M_CMD
+        sta (P1),y
+        lda #0
+        sta MW0
+        sta MW1
+        ldy #M_STAT
+@w:     lda (P1),y
+        cmp #STAT_OK
+        beq @ok
+        cmp #STAT_NOTMINE
+        beq @no
+        cmp #STAT_SCAN
+        beq @no
+        inc MW0
+        bne @w
+        inc MW1
+        bne @w
+@no:    sec
+        rts
+@ok:    ldy #M_DATA
+@d:     lda (P1),y              ; read twice in a row until two agree, as the KERNAL does
+        cmp (P1),y
+        bne @d
+        clc
         rts
 
 ; open logical file A on device X, secondary Y, without a name (the command channel)
@@ -2237,6 +2363,10 @@ RESWS:  .res 1
 RESEP:  .res 1
 VD0:    .res 1          ; the tdrive units (VD1 right after VD0)
 VD1:    .res 1
+AGENT:  .res 1          ; $80: the agent's registers (findmb)
+SDV:    .res 1          ; agscan: the number being probed
+MW0:    .res 1          ; mcall: the wait count
+MW1:    .res 1
 OC:     .res 1
 OB:     .res 1
 OT:     .res 1

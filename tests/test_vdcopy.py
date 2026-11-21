@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """VDCOPY (util/vdcopy.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against the real drive code.
 
-Both units are d64/tdrive.c through libd64: unit 8 plays the real floppy drive (the program only knows the tdrive units from $DE16/$DE17,
+Both units are d64/tdrive.c through libd64: unit 8 plays the real floppy drive (the program only knows the tdrive units from its device registers,
 and those say 9), unit 9 is the SD card with a host folder behind it (CD: mounts, N:NAME.D64 creates, "!STATE" gives the TR menu's
 colours). The real 1541's side of the sector copy (U1/U2/B-P on a true drive) runs in VICE (tools/tdrive_mock.py scan); this tests the
 program's logic, its screens and the bytes it moves."""
@@ -101,8 +101,8 @@ class T(unittest.TestCase):
         self.vd.attach(0, self.floppy)
         self.vd.attach(1, None)
 
-    def start(self, *keys, mem=None):
-        self.b = C64(PRG, Bus(self.vd), {56854: SD, 56855: 0, **(mem or {})})
+    def start(self, *keys, mem=None, **kw):
+        self.b = C64(PRG, self.bus if hasattr(self, "bus") else Bus(self.vd), {56854: SD, 56855: 0, **(mem or {})}, **kw)
         self.b.press(*keys)
         return self.b.run(max_steps=60_000_000)
 
@@ -226,6 +226,40 @@ class T(unittest.TestCase):
         self.assertEqual(self.floppy.read_file(b"HELLO"), b"\x01\x08" + bytes(range(256)) * 3)
         self.keys("\r")
         self.assertIn("COPY FILES", self.text(), "RETURN at the prompt: back to the menu")
+
+    # ---- the TDrive agent (plain TeensyROM; "TDrive Agent" on the TR+): registers at $DF00, IO1 $DE08-$DEFF is its code ----
+    def agent(self, *keys, real):
+        """the SD unit's provisional number is 8 (the agent's engine has not scanned yet); c64_sim renumbers it on VIO_SCAN / VIO_FREE"""
+        self.bus = Bus(self.vd)
+        self.bus.units = {8: Unit("SD")}
+        r = self.start(*keys, mem={56854: 8}, layout="agent", real=real, real_open=True)
+        self.assertTrue(all(a >= 0xDF00 for a in self.b.io_writes), "nothing written to IO1 (the agent's code)")
+        return r
+
+    def test_agent_with_a_real_drive_at_8(self):
+        self.assertEqual(self.agent(real={8}), "key")
+        self.assertEqual(self.b.scans, [14, 15], "VIO_SCAN, then VIO_FREE at 9 (8 answered)")
+        self.assertEqual(list(self.bus.units), [9])
+        self.assertIn("TDRIVE: SD UNIT 9", self.text())
+        self.assertEqual(self.keys("D", "9\r", "8\r", "GAME.D64\r", "W"), "key")
+        self.assertIn("DONE, 0 READ ERRORS", self.row(1))
+        self.assertEqual(self.floppy.dump(), self.game, "the SD image onto the real drive at 8")
+
+    def test_agent_empty_bus(self):
+        self.assertEqual(self.agent(real=()), "key")
+        self.assertEqual(self.b.scans, [14, 15], "VIO_FREE at 8: nobody there")
+        self.assertIn("TDRIVE: SD UNIT 8", self.text())
+
+    def test_no_tdrive_handler(self):
+        """no ID bytes at $DE19/$DE1A or $DF09/$DF0A: no tdrive unit, whatever $DE16 reads, and nothing written to IO"""
+        self.assertEqual(self.start(layout=None), "key")
+        self.assertNotIn("SD UNIT", self.text())
+        self.assertEqual(self.b.io_writes, [])
+        self.assertEqual(self.keys("Q"), "end")
+
+
+class Unit:
+    def __init__(self, title): self.title = title
 
 
 if __name__ == "__main__":

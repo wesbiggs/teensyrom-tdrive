@@ -551,9 +551,52 @@ class T(unittest.TestCase):
         self.b.traps[0xFFB1] = lambda: probes.append(self.b.cpu.a)
         self.assertEqual(self.b.run(), "key")
         self.assertEqual(probes, [])
+        self.assertEqual(self.b.scans, [], "no bus scan of its own under the KERNAL build")
         self.assertEqual(self.row(1), "SD  9: (Nothing mounted)")
         self.keys(RET)
         self.assertEqual(self.drive.units[9].mounted, "/games/zork.d64")
+
+    # ---- the TDrive agent (plain TeensyROM; "TDrive Agent" on the TR+): registers at $DF00, IO1 is the agent's code ----
+    def agent(self, real=(), usb=True):
+        self.drive = FakeDrive(make_sd() | {"/tdrive-config.txt": CONFIG.encode()}, {"/usb.d64": IMG} if usb else None)
+        self.b = C64(PRG, self.drive, {56854: 8, 56855: 9 if usb else 0, 53280: 14, 53281: 6, 646: 14}, layout="agent", real=real)
+        self.assertEqual(self.b.run(), "key", self.b.screen.text())
+        self.assertTrue(all(0xDF00 <= a for a in self.b.io_writes), "nothing written to IO1 (the agent's code)")
+
+    def test_agent(self):
+        self.agent()
+        self.assertEqual(self.b.scans, [14, 15, 15], "VIO_SCAN, then the free numbers 8 and 9")
+        self.assertEqual(self.row(1), "SD  8: (Nothing mounted)")
+        self.assertEqual(self.row(3), "List: SD (4 entries)" + " " * 8 + "Alt: 1 tap")
+        self.keys(RET)
+        self.assertEqual(self.drive.units[8].mounted, "/games/zork.d64")
+        self.keys("a")
+        self.assertGreater(self.b.fast_opens, 0, "the browser's block listings through the agent's registers")
+        self.b.press(LEFTARROW, "q")
+        self.assertEqual(self.b.run(), "menu")
+        self.assertEqual(self.b.mem[0xDF00], 16, "VIO_MENU at the agent's command register")
+
+    def test_agent_with_a_real_drive_at_8(self):
+        # the units' numbers are provisional (8, 9) until a scan; the program scans first, so its OPENs never reach the 1541 at 8
+        self.agent(real={8})
+        self.assertEqual(sorted(self.drive.units), [9, 10])
+        self.assertEqual(self.row(1), "SD  9: (Nothing mounted)")
+        self.keys(RET)
+        self.assertEqual(self.drive.units[9].mounted, "/games/zork.d64")
+
+    def test_agent_without_usb(self):
+        self.agent(real={8, 9}, usb=False)
+        self.assertEqual(self.b.scans, [14, 15])
+        self.assertEqual(self.row(1), "SD 10: (Nothing mounted)")
+
+    def test_no_tdrive_handler(self):
+        # another Special IO (or none): no ID bytes, so not one write to IO1 / IO2 (the TR menu's handler keeps EEPROM settings there)
+        self.drive = FakeDrive(make_sd())
+        self.b = C64(PRG, self.drive, {56854: 8, 56855: 9}, layout=None)
+        self.assertEqual(self.b.run(), "end")
+        self.assertIn("not active", self.b.screen.text())
+        self.assertIn("TDrive Special IO", self.b.screen.text().replace("\n", " "))
+        self.assertEqual(self.b.io_writes, [])
 
     def test_too_long_to_save(self):
         cfg = "/a.d64, 1, 1\r\n/b.d64, 2, 2\r\n" + "".join("# %s\r\n" % ("x" * 76) for _ in range(25))

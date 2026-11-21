@@ -10,6 +10,13 @@ have, "end" when it returns to BASIC and "menu" when it writes the tdrive mailbo
 C64 into the TR menu then; answered at $DE13 unless menu_answer is False). The fast LOAD's block commands FLOAD_OPEN / FLOAD_BLK are
 answered from the drive as well (the name and the blocks in the IO2 window at $DF80, DATA $DE12, ST $DE14), unless fast is False
 ("not mine": the program must fall back to OPEN + CHRIN); fast_blocks counts the blocks sent.
+layout picks the TDrive handler: "kernal" (the TR+ KERNAL build: registers at $DE10, ID bytes $D6 $64 at $DE19/$DE1A), "agent" (the
+TDrive agent: registers at $DF00, IDs at $DF09/$DF0A, IO1 $DE08-$DEFF the agent's code, which the program must never write) or None
+(no TDrive handler: no IDs, and any write to $DE00-$DFFF fails the run). The device numbers in mem are given at the KERNAL build's
+$DE16/$DE17 and moved to the layout's registers. Under the agent the bus scan is modelled as d64/tdrive_vec.c and d64/tdrive_io.c do it:
+real = the numbers a real drive answers at; the units' numbers are provisional until VIO_SCAN / VIO_FREE (the program's own scan) or,
+failing that, the engine's own scan at the first OPEN; an OPEN that reaches a real drive is an error ("not modelled") unless
+real_open is True: then the drive object answers it (a test whose drive plays the real one too, tests/test_vdcopy.py).
 Kept from the real KERNAL on purpose: CHRIN from a serial file answers CR without reading while ST ($90) is not 0, every read ORs its
 bits into ST, and bytes sent to a file reach the drive at UNLISTEN (CLRCHN / CLOSE), so a command is one PRINT#."""
 from py65.devices.mpu6502 import MPU
@@ -74,13 +81,27 @@ class C64:
     MBXCMD, MBXARG, MBXDATA, MBXSTAT, MBXST, MBXLEN, WIN, VIO_MENU, FLOAD_OPEN, FLOAD_BLK = 0xDE10, 0xDE11, 0xDE12, 0xDE13, 0xDE14, 0xDE15, 0xDF80, 16, 9, 10
     FL = "fast-load"                                    # the drive channel the fast commands use
 
-    def __init__(self, prg, drive, mem=None, menu_answer=True, fast=True):
+    VIO_SCAN, VIO_FREE = 14, 15
+    AGENT_CODE = 0xDE   # what the agent's page reads (its byte at $DE16 is $DE: the number a program reading the wrong layout saw)
+
+    def __init__(self, prg, drive, mem=None, menu_answer=True, fast=True, layout="kernal", real=(), real_open=False):
         prg = bytes(prg)
         self.cpu = c = MPU(memory=ObservableMemory())
         self.mem = c.memory
         load = prg[0] | prg[1] << 8
         self.mem[load:load + len(prg) - 2] = list(prg[2:])
-        for a, v in (mem or {}).items(): self.mem[a] = v
+        self.layout, self.real, self.real_open = layout, set(real), real_open
+        base = 0xDF00 if layout == "agent" else 0xDE10
+        (self.MBXCMD, self.MBXARG, self.MBXDATA, self.MBXSTAT, self.MBXST, self.MBXLEN) = range(base, base + 6)
+        self.DEV0 = base + 6
+        if layout == "agent":
+            for a in range(0xDE08, 0xDF00): self.mem[a] = self.AGENT_CODE
+        if layout is not None: self.mem[base + 9], self.mem[base + 10] = 0xD6, 0x64
+        for a, v in (mem or {}).items(): self.mem[self.DEV0 + a - 0xDE16 if 0xDE10 <= a <= 0xDE1A else a] = v
+        self.scan_pending = layout == "agent"          # the agent's units have provisional numbers until a scan
+        self.released, self.scans = None, []
+        self.io_writes, self.inside = [], False
+        self.mem.subscribe_to_write(range(0xDE00, 0xE000), self.io_write)
         i = prg.index(b"\x9e") + 1
         start = int(prg[i:prg.index(b"\0", i)].decode().strip())
         self.screen, self.drive, self.keys = Screen(), drive, []
@@ -88,7 +109,6 @@ class C64:
         self.lfs, self.name, self.ldev, self.steps = (0, 0, 0), "", None, 0
         self.menu, self.menu_answer = False, menu_answer
         self.fast, self.fast_blocks, self.fast_opens = fast, 0, 0
-        self.mem.subscribe_to_write([self.MBXCMD], self.mbx_cmd)
         c.sp = 0xF6
         self.push((END - 1) >> 8); self.push((END - 1) & 0xFF)
         c.pc = start
@@ -131,8 +151,45 @@ class C64:
             if isinstance(k, str): self.keys.extend(ord(petscii(ch)) for ch in k)     # unshifted keys give the upper case codes
             else: self.keys.append(k)
 
+    def io_write(self, addr, v):
+        if self.inside: return None                     # the model's own answers
+        ok = self.layout is not None and (self.MBXCMD <= addr <= self.MBXLEN or self.WIN <= addr < self.WIN + 128)
+        if not ok: raise RuntimeError("write of $%02X to $%04X: not a register of this TDrive handler (%s)" % (v, addr, self.layout))
+        self.io_writes.append(addr)
+        if addr == self.MBXCMD:
+            self.inside = True
+            try: self.mbx_cmd(addr, v)
+            finally: self.inside = False
+        return None
+
+    # ---- the agent's bus scan (tdrive_scan_begin / tdrive_scan_free) ----
+    def publish(self):
+        n = {u.title: d for d, u in self.drive.units.items()}
+        self.mem[self.DEV0], self.mem[self.DEV0 + 1] = n.get("SD", 0), n.get("USB", 0)
+
+    def scan_begin(self):
+        self.scan_pending = False
+        self.released = sorted(self.drive.units.values(), key=lambda u: u.title != "SD")
+        self.drive.units = {}
+        self.publish()
+        return len(self.released)
+
+    def scan_free(self, dev):
+        if self.released and 8 <= dev <= 30 and dev not in self.drive.units: self.drive.units[dev] = self.released.pop(0)
+        self.publish()
+        return len(self.released)
+
     def mbx_cmd(self, addr, v):
         m = self.mem
+        if v in (self.VIO_SCAN, self.VIO_FREE):
+            if self.layout != "agent": raise RuntimeError("bus scan command under the %s layout" % self.layout)
+            self.scans.append(v)
+            m[self.MBXDATA] = self.scan_begin() if v == self.VIO_SCAN else self.scan_free(m[self.MBXARG])
+            m[self.MBXST] = 0
+            m[self.MBXSTAT] = 0x5A
+            return
+        if v in (self.FLOAD_OPEN, self.FLOAD_BLK) and self.scan_pending:
+            m[self.MBXSTAT] = 0x3C; return                  # SCANREQ: a transaction before any scan
         if v in (self.FLOAD_OPEN, self.FLOAD_BLK):
             if not self.fast: m[self.MBXSTAT] = 0xA5; return
             m[self.MBXST] = 0
@@ -174,7 +231,15 @@ class C64:
     def open(self):
         lf, dev, sa = self.lfs
         if lf in self.files: return self.ret(a=2, carry=1)
-        if dev not in self.drive.units: self.mem[STATUS] |= 0x80; return self.ret(a=5, carry=1)
+        if self.scan_pending and dev >= 4 and self.name:   # the agent's engine scans at the run's first OPEN, before it looks at the number
+            self.inside = True
+            self.scan_begin()
+            for d in range(8, 31):
+                if not self.released: break
+                if d not in self.real: self.scan_free(d)
+            self.inside = False
+        if dev in self.real and dev not in self.drive.units and not self.real_open: raise RuntimeError("OPEN %d,%d,%d,%r reached a real drive" % (lf, dev, sa, self.name))
+        if dev not in self.drive.units and not (self.real_open and dev in self.real): self.mem[STATUS] |= 0x80; return self.ret(a=5, carry=1)
         self.files[lf] = (dev, sa)
         self.drive.open(lf, dev, sa, self.name)
         self.ret(carry=0)
@@ -234,6 +299,6 @@ class C64:
     def listen(self): self.ldev = self.cpu.a
 
     def second(self):
-        if self.ldev not in self.drive.units: self.mem[STATUS] |= 0x80
+        if self.ldev not in self.drive.units and self.ldev not in self.real: self.mem[STATUS] |= 0x80
 
     def unlsn(self): pass
