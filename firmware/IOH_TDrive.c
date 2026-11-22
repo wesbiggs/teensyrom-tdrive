@@ -912,7 +912,7 @@ FLASHMEM bool TDrive_ProbeStep()
 // the C64 still waits in the TR menu, so nothing reads them yet.
 #define TD_BannerRegBase 60   // IO1 offset of the banner registers under the TR menu's handler ($DE3C)
 static_assert(TD_BannerRegBase + 4 <= IO1Size, "the banner registers must lie inside the menu's IO1 array");
-static const uint8_t TD_BannerTag[8] = { 'V', 'D', 'U', 'N', 'I', 'T', 'S', ':' };
+static const uint8_t TD_BannerTag[8] = { 'T', 'D', 'U', 'N', 'I', 'T', 'S', ':' };
 
 FLASHMEM static bool TD_HasBannerTag(const uint8_t *img)   // in an 8 KB image: a TDrive KERNAL from 0.9.0.36 on
 {
