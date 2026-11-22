@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The power-on banner's drive numbers (vd_banner, patches/vdbanner.s) run in a 6502 simulator (py65; skipped when it is not installed).
+"""The power-on banner's drive numbers (td_banner, patches/tdbanner.s) run in a 6502 simulator (py65; skipped when it is not installed).
 
 The KERNAL is assembled onto a synthetic 8 KB image that only has the bytes tools/build.py checks, so no Commodore ROM is needed.
 The stock routines the banner calls are trapped by address: BASIC's STROUT ($AB1E) and CHROUT ($FFD2) collect the text, and the
@@ -10,7 +10,7 @@ import pathlib, subprocess, sys, tempfile
 try:
     from py65.devices.mpu6502 import MPU
 except ImportError:
-    print("SKIP py65 not installed (pip install py65): vd_banner not simulated"); sys.exit(0)
+    print("SKIP py65 not installed (pip install py65): td_banner not simulated"); sys.exit(0)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 stock = bytearray(8192)
@@ -22,11 +22,11 @@ with tempfile.TemporaryDirectory() as t:
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/build.py"), str(t / "stock.bin"), str(t / "k.bin")], check=True, capture_output=True)
     img = bytearray((t / "k.bin").read_bytes())
 
-TAG = b"VDUNITS:"                          # what the firmware searches for (VD_BannerUnits, firmware/IOH_TDrive.c)
+TAG = b"TDUNITS:"                          # what the firmware searches for (TD_BannerUnits, firmware/IOH_TDrive.c)
 tag = img.find(TAG)
 assert tag > 0 and img.find(TAG, tag + 1) < 0, "exactly one tag in the image"
 assert img[tag + 8:tag + 10] == b"\x00\x00", "built with no units: the stock line"
-assert img[0x42D] == 0x20 and img[0x43D] == 0x4C, "INITMS: JSR vd_head, JMP vd_banner"
+assert img[0x42D] == 0x20 and img[0x43D] == 0x4C, "INITMS: JSR td_head, JMP td_banner"
 assert img[0x49A] == 0, "the banner string at $E473 ends after the top line"
 img[0x460:0x473] = b" BASIC BYTES FREE\r\x00"   # the stock string at $E460 the no-firmware case prints (not in the synthetic image)
 ST = 0x90
@@ -123,5 +123,5 @@ check((0, 0), (), None, [], regs=(0xD6, 0x65, 8, 9))                  # a wrong 
 check((0, 0), (), None, [], regs=(0xD5, 0x64, 8, 9))
 check((10, 11), (8,), "SD10 USB11", [], regs=R(0xFE, 0xFE))           # the served image's bytes come first
 
-print("PASS vd_banner: menu registers for a resident KERNAL (tag, settled / automatic / absent, cleared, wrong tag, image first)")
-print("PASS vd_banner: stock line without firmware / automatic / fixed / absent / full bus / two digits; always 38 wide; probes are LISTEN + SECOND $6F (+ UNLSN)")
+print("PASS td_banner: menu registers for a resident KERNAL (tag, settled / automatic / absent, cleared, wrong tag, image first)")
+print("PASS td_banner: stock line without firmware / automatic / fixed / absent / full bus / two digits; always 38 wide; probes are LISTEN + SECOND $6F (+ UNLSN)")

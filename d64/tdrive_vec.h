@@ -1,4 +1,4 @@
-/* Vector engine for the plain TeensyROM (docs/DESIGN.md 53): the Teensy side of the 6502 agent in vector/vdagent.s.
+/* Vector engine for the plain TeensyROM (docs/DESIGN.md 53): the Teensy side of the 6502 agent in vector/tdagent.s.
  *
  * The KERNAL's RAM vectors point into the agent, which the Teensy serves from an IO page. Each call arrives here as a frame
  * (the registers and a few zero-page bytes, in the mailbox window, command VV_C_VEC); the answer is a short script for the agent:
@@ -24,7 +24,7 @@ enum { VV_OP_GO = 0, VV_OP_POKE = 1, VV_OP_PEEK = 2, VV_OP_CONT = 4 };
 enum { VV_E_INSTALL, VV_E_OPEN, VV_E_CLOSE, VV_E_CHKIN, VV_E_CKOUT, VV_E_CLRCH, VV_E_BASIN, VV_E_BSOUT, VV_E_CLALL,
        VV_E_LOAD, VV_E_SAVE, VV_E_MAIN, VV_NE };
 
-/* the agent's layout (asserted in vector/vdagent.s) */
+/* the agent's layout (asserted in vector/tdagent.s) */
 #define VV_OFS_CTRAMP   0       /* JSR $xxxx (the routine of a CALL), then JSR enter: the result */
 #define VV_OFS_OLD      6       /* old_bsout, old_basin, old_getin: the fast paths' chain targets */
 #define VV_OFS_ENTRIES  12      /* VV_NE x JSR enter */

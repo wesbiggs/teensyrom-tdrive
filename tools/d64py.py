@@ -84,7 +84,7 @@ class Disk:
 
 LIB.tdrive_sizeof.restype = ctypes.c_size_t
 LIB.tdrive_mailbox.restype = ctypes.c_int
-(VD_LISTEN, VD_TALK, VD_SECOND, VD_TKSA, VD_CIOUT, VD_ACPTR, VD_UNLSN, VD_UNTLK) = range(1, 9)
+(TD_LISTEN, TD_TALK, TD_SECOND, TD_TKSA, TD_CIOUT, TD_ACPTR, TD_UNLSN, TD_UNTLK) = range(1, 9)
 
 
 class TDrive:
@@ -105,24 +105,24 @@ class TDrive:
 
     # --- KERNAL-shaped helpers (what OPEN/SAVE/LOAD/INPUT# do on the bus) ---
     def listen(self, dev, sa, payload=b""):
-        st = self.cmd(VD_LISTEN, dev)[2]
-        st |= self.cmd(VD_SECOND, sa)[2]
-        for b in payload: st |= self.cmd(VD_CIOUT, b)[2]
-        st |= self.cmd(VD_UNLSN)[2]
+        st = self.cmd(TD_LISTEN, dev)[2]
+        st |= self.cmd(TD_SECOND, sa)[2]
+        for b in payload: st |= self.cmd(TD_CIOUT, b)[2]
+        st |= self.cmd(TD_UNLSN)[2]
         return st
 
     def talk(self, dev, sa, n=None):
         """read until EOI (or n bytes); returns (bytes, st)"""
-        st = self.cmd(VD_TALK, dev)[2]
-        st |= self.cmd(VD_TKSA, sa)[2]
+        st = self.cmd(TD_TALK, dev)[2]
+        st |= self.cmd(TD_TKSA, sa)[2]
         out, last = b"", 0
         while n is None or len(out) < n:
-            nm, d, s = self.cmd(VD_ACPTR)
+            nm, d, s = self.cmd(TD_ACPTR)
             last = s
             if s & 0x02: break
             out += bytes([d])
             if s & 0x40: break
-        self.cmd(VD_UNTLK)
+        self.cmd(TD_UNTLK)
         return out, last
 
     def open(self, dev, ch, name): return self.listen(dev, 0xF0 | ch, name)
@@ -186,7 +186,7 @@ class VIO:
     def arm_scan(self): return LIB.vio_arm_scan(self.v)
     def probe_begin(self): return LIB.vio_probe_begin(self.v)
     def probe_free(self, dev): return LIB.vio_probe_free(self.v, ctypes.c_uint8(dev))
-    def vd_act(self): return LIB.tdrive_active(self.v)
+    def td_act(self): return LIB.tdrive_active(self.v)
     def take_menu(self): return LIB.vio_take_menu(self.v)
 
     def set_devices(self, d0, d1):

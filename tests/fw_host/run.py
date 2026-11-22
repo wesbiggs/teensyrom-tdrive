@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile firmware/IOH_TDrive.c against host stubs and run it; then check the images it wrote with c1541.
 
-usage: run.py [STOCK.bin]   with a stock KERNAL the patched image the glue builds from it (VD_KernalImage) is compared with
+usage: run.py [STOCK.bin]   with a stock KERNAL the patched image the glue builds from it (TD_KernalImage) is compared with
                             tools/build.py's; without one (or with a ROM the glue does not know) only the other KERNAL checks run"""
 import pathlib, shutil, subprocess, sys, tempfile
 
@@ -16,7 +16,7 @@ try:
     (base / "IO_Handlers").mkdir(parents=True); (base / "tdrive").mkdir(); di.mkdir(parents=True)
     shutil.copy(ROOT / "firmware/IOH_TDrive.c", base / "IO_Handlers/glue.c")
     shutil.copy(ROOT / "firmware/IOH_TDriveSwift.c", base / "IO_Handlers/swift.c")
-    shutil.copy(ROOT / "firmware/IOH_TDriveREU.c", base / "IO_Handlers/vdreu.c")
+    shutil.copy(ROOT / "firmware/IOH_TDriveREU.c", base / "IO_Handlers/tdreu.c")
     shutil.copy(ROOT / "firmware/IOH_TDriveSwiftREU.c", base / "IO_Handlers/swiftreu.c")
     shutil.copy(ROOT / "firmware/IOH_TDriveAgent.c", base / "IO_Handlers/agent.c")
     for f in (ROOT / "d64").iterdir():
@@ -24,8 +24,8 @@ try:
         elif f.suffix in (".c", ".h"): shutil.copy(f, base / "tdrive" / f.name)
     vh = base / "tdrive/tdrive.h"                                       # as tools/make_tr_patch.sh rewrites it
     vh.write_text(vh.read_text().replace('#include "d64.h"', '#include "../../../DiskImage/d64.h"'))
-    subprocess.run([sys.executable, "-I", str(ROOT / "tools/build.py"), "--table", str(base / "tdrive/vd_kpatch.h")], check=True)
-    subprocess.run([sys.executable, "-I", str(ROOT / "tools/build_agent.py"), str(base / "tdrive/vd_agent.h")], check=True)
+    subprocess.run([sys.executable, "-I", str(ROOT / "tools/build.py"), "--table", str(base / "tdrive/td_kpatch.h")], check=True)
+    subprocess.run([sys.executable, "-I", str(ROOT / "tools/build_agent.py"), str(base / "tdrive/td_agent.h")], check=True)
     stock = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
     kstock, kpatched = tmp / "kstock.bin", tmp / "kpatched.bin"
     if stock and stock.exists():
@@ -33,7 +33,7 @@ try:
         subprocess.run([sys.executable, "-I", str(ROOT / "tools/build.py"), str(stock), str(kpatched)], check=True, capture_output=True)
     shutil.copy(ROOT / "tests/fw_host/stub.h", base / "stub.h")
     main = (ROOT / "tests/fw_host/main.cpp").read_text().replace('#include "glue.c"', '#include "IO_Handlers/glue.c"')
-    # the glue expects tdrive_io.h's VIO_/VD_ symbols; tdrive.h/d64.h arrive through the .c includes' headers
+    # the glue expects tdrive_io.h's VIO_/TD_ symbols; tdrive.h/d64.h arrive through the .c includes' headers
     (base / "main.cpp").write_text(main)
     exe = tmp / "fwhost"
     r = subprocess.run(["c++", "-std=gnu++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror", "-I", str(base / "tdrive"),
@@ -41,7 +41,7 @@ try:
     if r.returncode:
         print(r.stdout + r.stderr); sys.exit(1)
     print("PASS firmware glue compiles as C++ (-Wall -Wextra -Werror) against host stubs")
-    for flag in ("-DVD_TRACE", "-DVD_NO_TRACE", "-DVD_ALLOC_HEAP"):
+    for flag in ("-DTD_TRACE", "-DTD_NO_TRACE", "-DTD_ALLOC_HEAP"):
         r = subprocess.run(["c++", "-std=gnu++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror", flag, "-I", str(base / "tdrive"),
                             "-fsyntax-only", str(base / "main.cpp")], capture_output=True, text=True)
         if r.returncode:
@@ -100,7 +100,7 @@ try:
 
     # without Fab04_TDriveDMALoad (the upstream build): no DMA hook, every LOAD part through the window, all other checks the same
     exe2 = tmp / "fwhost_nodma"
-    r = subprocess.run(["c++", "-std=gnu++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror", "-DVD_TEST_NO_DMA", "-I", str(base / "tdrive"),
+    r = subprocess.run(["c++", "-std=gnu++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror", "-DTD_TEST_NO_DMA", "-I", str(base / "tdrive"),
                         "-o", str(exe2), str(base / "main.cpp")], capture_output=True, text=True)
     if r.returncode:
         print(r.stdout + r.stderr); sys.exit(1)

@@ -1,4 +1,4 @@
-"""The vector engine (d64/tdrive_vec.c) against a Python stand-in for the agent (vector/vdagent.s): the script ops, INSTALL and its
+"""The vector engine (d64/tdrive_vec.c) against a Python stand-in for the agent (vector/tdagent.s): the script ops, INSTALL and its
 fast-path vectors, chaining, the re-hook after RESTOR, a call that arrives while a ROM routine runs, and contexts left over by
 RUN/STOP+RESTORE. The whole thing runs in VICE in `make test-agent`; this covers the cases VICE cannot easily set up.
 C128Test: the same engine with the C128's 128-mode KERNAL (docs/DESIGN.md 56) against a model of its MMU: two RAM banks, the ROMs of
@@ -17,7 +17,7 @@ STOCK = {0x0302: 0xA483, 0x031A: 0xF34A, 0x031C: 0xF291, 0x031E: 0xF20E, 0x0320:
 
 
 class Agent:
-    """runs the engine's scripts against a 64 KB memory image, as vector/vdagent.s does on the C64"""
+    """runs the engine's scripts against a 64 KB memory image, as vector/tdagent.s does on the C64"""
     def __init__(self, vv, io):
         self.vv, self.io = vv, io
         self.mem = bytearray(65536)

@@ -73,6 +73,6 @@ def build_tdsuite(out, bad, mock=False):
     subprocess.run(["ca65", *defs, "-I", str(ROOT / "tests" / "asm"), "-o", str(obj), str(ROOT / "tests" / "asm" / "suite.s")], check=True)
     subprocess.run(["ld65", "-C", str(cfg), "-o", str(mc), str(obj)], check=True)   # fails when the code passes SUITE_TOP
     code = mc.read_bytes()
-    assert code[-14:-12] == b"VD", "the jump table must end the code"
+    assert code[-14:-12] == b"TD", "the jump table must end the code"
     prg.write_bytes(basic + bytes(at - 0x0801 - (len(basic) - 2)) + code)
     return prg

@@ -126,12 +126,12 @@ struct FsFile {
 };
 
 struct SerialStub { void println(const char *s) { puts(s); } template <class... A> void printf(const char *f, A... a) { ::printf(f, a...); } void flush() { fflush(stdout); } };
-// the Alt-button trace's CrashReport breadcrumbs / fault record / reset reason (IOH_TDrive.c VD_Trace*): plain arrays here
-extern volatile uint32_t g_vd_bc[8], g_vd_fault[11];
-extern uint32_t g_vd_srsr;
-#define VD_TRACE_BC    (g_vd_bc)
-#define VD_TRACE_FAULT (g_vd_fault)
-#define VD_TRACE_SRSR  (g_vd_srsr)
+// the Alt-button trace's CrashReport breadcrumbs / fault record / reset reason (IOH_TDrive.c TD_Trace*): plain arrays here
+extern volatile uint32_t g_td_bc[8], g_td_fault[11];
+extern uint32_t g_td_srsr;
+#define TD_TRACE_BC    (g_td_bc)
+#define TD_TRACE_FAULT (g_td_fault)
+#define TD_TRACE_SRSR  (g_td_srsr)
 inline void arm_dcache_flush(void *, uint32_t) {}
 extern SerialStub Serial;
 uint32_t millis();
@@ -157,7 +157,7 @@ enum { eepAdTDriveDevs = 4235, eepAdNextIOHndlr = 6 };
 #ifndef PLAIN_TR                                      // -DPLAIN_TR: the plain TeensyROM (no Fab04_*: no KERNAL handlers, REU, Special button)
 #define Fab04_REU
 #define Fab04_TDrive
-#ifndef VD_TEST_NO_DMA                                // run.py also builds the glue without it: the window LOAD only (no DMA hook)
+#ifndef TD_TEST_NO_DMA                                // run.py also builds the glue without it: the window LOAD only (no DMA hook)
 #define Fab04_TDriveDMALoad
 #endif
 #endif

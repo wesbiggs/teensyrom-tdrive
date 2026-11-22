@@ -29,19 +29,19 @@ stcIOHandlers IOHndlr_TDriveREU =
 // fBusSnoop is one pointer, and both sides want it: KernalCheck serves the replacement KERNAL on every cycle, and an REU command
 // that waits for a write to $FF00 points it at REU_FF00_W_Check, which sets it to NULL when the transfer starts. Either would
 // stop the KERNAL being served. So after every REU register access the hook is put back: while a $FF00 trigger is armed,
-// VDREU_Snoop watches for it and otherwise runs the snoop that was there before (KernalCheck); after the trigger, or once an
+// TDREU_Snoop watches for it and otherwise runs the snoop that was there before (KernalCheck); after the trigger, or once an
 // immediate command has cleared the hook, that snoop is back on its own.
-static bool (*vdReuBase)(uint16_t Address, bool R_Wn) = NULL;   // the snoop the REU displaced (KernalCheck)
+static bool (*tdReuBase)(uint16_t Address, bool R_Wn) = NULL;   // the snoop the REU displaced (KernalCheck)
 
-FASTRUN bool VDREU_Snoop(uint16_t Address, bool R_Wn)
+FASTRUN bool TDREU_Snoop(uint16_t Address, bool R_Wn)
 {
    if (Address == 0xff00 && !R_Wn)
    {
       bool Skip = REU_FF00_W_Check(Address, R_Wn);   // starts the transfer (sets fBusSnoop = NULL)
-      fBusSnoop = vdReuBase;
+      fBusSnoop = tdReuBase;
       return Skip;
    }
-   return vdReuBase != NULL && vdReuBase(Address, R_Wn);
+   return tdReuBase != NULL && tdReuBase(Address, R_Wn);
 }
 
 FASTRUN void IO2Hndlr_TDriveREU(uint8_t Address, bool R_Wn)
@@ -54,9 +54,9 @@ FASTRUN void IO2Hndlr_TDriveREU(uint8_t Address, bool R_Wn)
    bool (*Prev)(uint16_t, bool) = fBusSnoop;
    IO2Hndlr_REU(Address, R_Wn);
    if (fBusSnoop == Prev) return;                     // the usual case: a register read or write that started nothing
-   if (Prev != &VDREU_Snoop) vdReuBase = Prev;        // not armed before: remember what to go back to
-   fBusSnoop = (fBusSnoop == &REU_FF00_W_Check) ? &VDREU_Snoop   // armed: watch for $FF00, keep serving the KERNAL meanwhile
-                                                 : vdReuBase;    // cleared (immediate start / re-armed without $FF00)
+   if (Prev != &TDREU_Snoop) tdReuBase = Prev;        // not armed before: remember what to go back to
+   fBusSnoop = (fBusSnoop == &REU_FF00_W_Check) ? &TDREU_Snoop   // armed: watch for $FF00, keep serving the KERNAL meanwhile
+                                                 : tdReuBase;    // cleared (immediate start / re-armed without $FF00)
 }
 
 FLASHMEM void InitHndlr_TDriveREU()
@@ -65,7 +65,7 @@ FLASHMEM void InitHndlr_TDriveREU()
    // re-stages KernalCheck and, when the alt-button setting is "None", takes the button for disk switching.
    Serial.printf("TDrive: RAM2 free before the REU: %lu\n", RAM2BytesFree());   // the REU needs 48 x 8 KB of it for 512 KB (docs/DESIGN.md 50)
    InitHndlr_REU();
-   vdReuBase = NULL;
+   tdReuBase = NULL;
    InitHndlr_TDrive();
 }
 

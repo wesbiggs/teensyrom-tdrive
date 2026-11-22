@@ -1,10 +1,10 @@
 #!/bin/sh
 # Generate firmware/teensyrom-tdrive.patch against a TeensyROM checkout.
 # usage: tools/make_tr_patch.sh /path/to/TeensyROM
-#        VD_DMA_LOAD=0 tools/make_tr_patch.sh /path/to/TeensyROM   -> build/teensyrom-tdrive-nodma.patch: no DMA LOAD, neither the firmware's
+#        TD_DMA_LOAD=0 tools/make_tr_patch.sh /path/to/TeensyROM   -> build/teensyrom-tdrive-nodma.patch: no DMA LOAD, neither the firmware's
 #        Fab04_TDriveDMALoad nor the KERNAL's request (the upstream TeensyROM build, docs/DESIGN.md 49); firmware/ is left alone
 set -e
-VD_DMA_LOAD="${VD_DMA_LOAD:-1}"; export VD_DMA_LOAD
+TD_DMA_LOAD="${TD_DMA_LOAD:-1}"; export TD_DMA_LOAD
 TR="$1"; [ -d "$TR/Source/Teensy/MinimalBoot/Common" ] || { echo "usage: $0 /path/to/TeensyROM"; exit 1; }
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # The D64/D71/D81 engine is TeensyROM's own (Source/Teensy/DiskImage, shared with GEOS, the TR block device and the menu): the patch
@@ -35,7 +35,7 @@ edit(f"{C}/Common_Defs.h",
      "   #define Fab04_KernalReplace        //include Kernal Replacement support\n"
      "   #define Fab04_TDrive               //virtual IEC drive for the replacement KERNAL (needs Fab04_KernalReplace)\n"
      + ("   #define Fab04_TDriveDMALoad        //TDrive LOAD writes C64 RAM by DMA (needs Fab04_FullDMACapable); off: the 128-byte window only\n"
-        if os.environ["VD_DMA_LOAD"] != "0" else ""))
+        if os.environ["TD_DMA_LOAD"] != "0" else ""))
 # both boards: the drive through the KERNAL's RAM vectors and a 6502 agent served from IO1 (docs/DESIGN.md 53; IOH_TDriveAgent.c)
 edit(f"{C}/Common_Defs.h",
      "   #define Fab04_DebugSignals         //For debug only\n#endif\n",
@@ -50,23 +50,23 @@ for old in ("#ifdef Fab04_GlobalKernalReplace\nextern volatile bool FnetLoopPoll
             "#ifdef Fab04_GlobalKernalReplace\n            if (FnetLoopPoll) NVIC_DISABLE_IRQ(IRQ_PIT);"):
     edit(f"{C}/IO_Handlers/IOH_Swiftlink.c", old,
          old.replace("#ifdef Fab04_GlobalKernalReplace", "#if defined(Fab04_GlobalKernalReplace) || defined(Fab04_TDrive)"))
-# The Alt-button trace (IOH_TDrive.c VD_Trace*, docs/DESIGN.md 60): which action a press goes to, and the trace kept across a
+# The Alt-button trace (IOH_TDrive.c TD_Trace*, docs/DESIGN.md 60): which action a press goes to, and the trace kept across a
 # reboot copied before upstream prints (and clears) the CrashReport, while no serial monitor is listening yet.
 edit("Source/Teensy/Teensy.ino",
      "      if (fSpecialBtnChange != NULL) fSpecialBtnChange(SpecialBtnBounce.read());\n",
-     "#ifdef Fab04_TDrive\n      VD_TraceButton(SpecialBtnBounce.read());\n#endif\n"
+     "#ifdef Fab04_TDrive\n      TD_TraceButton(SpecialBtnBounce.read());\n#endif\n"
      "      if (fSpecialBtnChange != NULL) fSpecialBtnChange(SpecialBtnBounce.read());\n")
 edit("Source/Teensy/Teensy.ino",
      "   if (CrashReport) Serial.print(CrashReport);\n",
-     "#ifdef Fab04_TDrive\n   VD_TraceBoot();\n#endif\n"
+     "#ifdef Fab04_TDrive\n   TD_TraceBoot();\n#endif\n"
      "   if (CrashReport) Serial.print(CrashReport);\n")
 import re
 base = re.search(r'#define TRVersion\s+"([^"]+)"', open(f"{C}/Common_Defs.h").read()).group(1)
 rev = open(sys.argv[2]).read().strip()                      # firmware/REV: bumped by hand on firmware-affecting commits
-vd_version = f"{base}.{rev}" if base.count(".") >= 2 else f"{base}.0.{rev}"   # e.g. 0.9 -> 0.9.0.1 (digits and dots only: the flash tool parses it)
+td_version = f"{base}.{rev}" if base.count(".") >= 2 else f"{base}.0.{rev}"   # e.g. 0.9 -> 0.9.0.1 (digits and dots only: the flash tool parses it)
 edit(f"{C}/Common_Defs.h",
      f'#define TRVersion              "{base}"    //*VERSION*',
-     f'#define TRVersion              "{vd_version}"    //*VERSION*  (stock {base} + TDrive rev {rev})')
+     f'#define TRVersion              "{td_version}"    //*VERSION*  (stock {base} + TDrive rev {rev})')
 edit(f"{C}/Common_Defs.h",
      "#define FWFullToken       0x64E2  // Full firmware response\n",
      "#define FWFullToken       0x64E2  // Full firmware response\n"
@@ -88,13 +88,13 @@ edit("Source/Teensy/SerUSBIO.ino",
      "#ifdef TDrive_Any\n"
      "   //TDrive running a C64 program: directory listings (so a client can browse for an image to mount) once the drive is quiet;\n"
      "   //  ASIDAllowed is only read by the Busy! test below, so it doubles as \"allowed while a program runs\"\n"
-     "   if (VD_IsHandler(CurrentIOHandler) && (TokenVal == GetDirectoryToken || TokenVal == GetDirNDJSONToken))\n   {\n"
+     "   if (TD_IsHandler(CurrentIOHandler) && (TokenVal == GetDirectoryToken || TokenVal == GetDirNDJSONToken))\n   {\n"
      "      char Msg[64];\n      if (TDrive_RemoteQuiet(Msg, sizeof Msg))\n      {\n         SendU16(FailToken);\n         CmdChannel->printf(\"%s\\n\", Msg);\n         return;\n      }\n"
      "      ASIDAllowed = true;\n   }\n"
      "#endif\n")
 edit(f"{C}/Common_Defs.h",
      "   eepAdNext          = 4235, // Next address to be used\n",
-     "   eepAdTDriveDevs    = 4235, // (2:uint8_t x2)  TDrive KERNAL device numbers of the SD / USB units, 0 = default (VD_DEV0/1)\n"
+     "   eepAdTDriveDevs    = 4235, // (2:uint8_t x2)  TDrive KERNAL device numbers of the SD / USB units, 0 = default (TD_DEV0/1)\n"
      "   eepAdNext          = 4237, // Next address to be used\n")
 edit("Source/Teensy/Teensy.ino",
      "   //future use:\n",
@@ -133,13 +133,13 @@ edit(f"{C}/IO_Handlers/StatusFunctions.c",
      "#ifdef Fab04_TDrive\n      NextIOHndlr = TDriveSwift_Remap(NextIOHndlr);   //SwiftLink programs keep the virtual drive\n#endif\n")
 edit(f"{C}/IO_Handlers/StatusFunctions.c",
      "   if (NextIOHndlr == IOH_KernalReplace)\n   {\n      InitHndlr_KERNALReplace_PreStart(); //separate function so it doesn't get called twice\n",
-     "   if (NextIOHndlr == IOH_KernalReplace\n#ifdef Fab04_TDrive\n       || VD_IsKernalHandler(NextIOHndlr)\n#endif\n      )\n   {\n"
-     "#ifdef Fab04_TDrive\n      KernalImageSource = VD_IsKernalHandler(NextIOHndlr) ? &VD_KernalImage : NULL; //TDrive: its own image (IOH_TDrive.c), not the <Shift-K> file\n"
-     "      if (VD_IsKernalHandler(NextIOHndlr)) TDrive_NoteLaunch(); //the menu source and image path for the auto-mount, before FreeDriveDirMenu() resets them\n"
+     "   if (NextIOHndlr == IOH_KernalReplace\n#ifdef Fab04_TDrive\n       || TD_IsKernalHandler(NextIOHndlr)\n#endif\n      )\n   {\n"
+     "#ifdef Fab04_TDrive\n      KernalImageSource = TD_IsKernalHandler(NextIOHndlr) ? &TD_KernalImage : NULL; //TDrive: its own image (IOH_TDrive.c), not the <Shift-K> file\n"
+     "      if (TD_IsKernalHandler(NextIOHndlr)) TDrive_NoteLaunch(); //the menu source and image path for the auto-mount, before FreeDriveDirMenu() resets them\n"
      "#ifdef Fab04_REU\n      if (NextIOHndlr == IOH_TDriveREU || NextIOHndlr == IOH_TDriveSwiftREU) FreeDriveDirMenu(); //the REU's AllocRAMBanks frees it anyway; first, so the drive's open Files fill its hole instead of pinning it under the heap top (docs/DESIGN.md 50)\n#endif\n"
      "#endif\n"
      "      InitHndlr_KERNALReplace_PreStart(); //separate function so it doesn't get called twice\n"
-     "#ifdef Fab04_TDrive\n      if (VD_IsKernalHandler(NextIOHndlr)) TDrive_PreStart(); //SD/USB probing now, while the C64 still waits\n#endif\n")
+     "#ifdef Fab04_TDrive\n      if (TD_IsKernalHandler(NextIOHndlr)) TDrive_PreStart(); //SD/USB probing now, while the C64 still waits\n#endif\n")
 # The TDrive Special IOs serve their own KERNAL (/TDrive/kernal.bin, else the C64's own ROM patched in memory; docs/DESIGN.md 40):
 # PreStart takes the image from KernalImageSource when one is set, the <Shift-K> file otherwise. The file branch stays where it
 # is, only braced, so the hunks are two small insertions.
@@ -268,15 +268,15 @@ cmp -s "$B/$M/Menu_Regs.i" "$TR/$M/Menu_Regs.i" || { echo "Menu_Regs.i would cha
 rm -rf "$B"
 mkdir -p "$C/tdrive"
 cp "$HERE"/d64/tdrive.c "$HERE"/d64/tdrive.h \
-   "$HERE"/d64/tdrive_io.c "$HERE"/d64/tdrive_io.h "$HERE"/d64/tdrive_vec.c "$HERE"/d64/tdrive_vec.h "$HERE"/d64/vd_cfg.h "$C/tdrive/"
+   "$HERE"/d64/tdrive_io.c "$HERE"/d64/tdrive_io.h "$HERE"/d64/tdrive_vec.c "$HERE"/d64/tdrive_vec.h "$HERE"/d64/td_cfg.h "$C/tdrive/"
 # d64.h from the shared engine (tests/fw_host/run.py lays its tree out the same way)
 sed -i.bak 's|^#include "d64.h"$|#include "../../../DiskImage/d64.h"|' "$C/tdrive/tdrive.h"; rm "$C/tdrive/tdrive.h.bak"
 grep -q '^#include "../../../DiskImage/d64.h"$' "$C/tdrive/tdrive.h" || { echo "tdrive.h: no d64.h include to point at DiskImage" >&2; exit 1; }
-# the KERNAL patches as a table for VD_KernalPatchApply (our bytes only; the firmware lays them over the C64's own ROM)
-python3 -I "$HERE/tools/build.py" --table "$C/tdrive/vd_kpatch.h" -D "VD_DMA_LOAD=$VD_DMA_LOAD"
-# the plain TR's agent (vector/vdagent.s) for IOH_TDriveAgent.c: linked at $DE08, registers at $DF00, window at $DF80
-python3 -I "$HERE/tools/build_agent.py" "$C/tdrive/vd_agent.h"
+# the KERNAL patches as a table for TD_KernalPatchApply (our bytes only; the firmware lays them over the C64's own ROM)
+python3 -I "$HERE/tools/build.py" --table "$C/tdrive/td_kpatch.h" -D "TD_DMA_LOAD=$TD_DMA_LOAD"
+# the plain TR's agent (vector/tdagent.s) for IOH_TDriveAgent.c: linked at $DE08, registers at $DF00, window at $DF80
+python3 -I "$HERE/tools/build_agent.py" "$C/tdrive/td_agent.h"
 git add -A -N
-if [ "$VD_DMA_LOAD" = 0 ]; then OUT="$HERE/build/teensyrom-tdrive-nodma.patch"; mkdir -p "$HERE/build"; else OUT="$HERE/firmware/teensyrom-tdrive.patch"; fi
+if [ "$TD_DMA_LOAD" = 0 ]; then OUT="$HERE/build/teensyrom-tdrive-nodma.patch"; mkdir -p "$HERE/build"; else OUT="$HERE/firmware/teensyrom-tdrive.patch"; fi
 git diff --no-color > "$OUT"
 echo "wrote ${OUT#$HERE/} ($(grep -c '^+++ ' "$OUT") files)"

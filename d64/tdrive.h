@@ -4,16 +4,16 @@
 #ifndef TDRIVE_H
 #define TDRIVE_H
 #include "d64.h"
-#include "vd_cfg.h"
+#include "td_cfg.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-enum { VD_LISTEN = 1, VD_TALK, VD_SECOND, VD_TKSA, VD_CIOUT, VD_ACPTR, VD_UNLSN, VD_UNTLK };
+enum { TD_LISTEN = 1, TD_TALK, TD_SECOND, TD_TKSA, TD_CIOUT, TD_ACPTR, TD_UNLSN, TD_UNTLK };
 
-#define VD_CMDBUF 64
-#define VD_HFBUF  64      /* chunk size of the host text file channels */
+#define TD_CMDBUF 64
+#define TD_HFBUF  64      /* chunk size of the host text file channels */
 
 /* Directory listings are generated a line at a time: no listing buffer. */
 typedef struct {
@@ -25,7 +25,7 @@ typedef struct {
     uint8_t   lpos, llen;       /* cursor / length of line[] */
     uint16_t  off;              /* bytes emitted so far, load address included */
     uint8_t   line[48];
-} vd_dirstream_t;
+} td_dirstream_t;
 
 /* REL channel: the record cursor over a d64_rel_t. One LISTEN session writes one record (the rest is zero-filled at UNLSN);
  * a read sends a record up to its last non-zero byte, with EOI, then moves to the next. */
@@ -36,21 +36,21 @@ typedef struct {
     uint8_t   rlen;             /* bytes a read of the current record sends (0 = not worked out yet) */
     uint8_t   wrote;            /* bytes came in during this LISTEN session */
     uint8_t   over;             /* 1: this record overflowed (51 reported), 2: it could not be made (52 / 72) */
-} vd_rel_t;
+} td_rel_t;
 
 /* A plain file on the card (nothing mounted): read through the host in 256-byte pieces. */
 typedef struct {
     uint32_t left;              /* bytes not yet fetched from the host */
     uint16_t pos, len;          /* cursor / fill of buf */
     uint8_t  buf[D64_SECTOR];
-} vd_plain_t;
+} td_plain_t;
 
 typedef struct {
     uint8_t  mode;              /* 0 free, 1 file read, 3 file write, 4 directory stream, 5 direct-access buffer (OPEN n,d,n,"#"),
                                    6 / 7 host text file read / write (OPEN n,d,n,"!CONFIG[,W]" / "!STATE"), 8 REL, 9 plain file on the card */
-    union { d64_file_t r; d64_wfile_t w; vd_dirstream_t d; struct { uint16_t pos; uint8_t buf[D64_SECTOR]; } b;
-            struct { uint8_t kind, pos, len; uint8_t buf[VD_HFBUF]; } h; vd_rel_t l; vd_plain_t p; } u;
-} vd_chan_t;
+    union { d64_file_t r; d64_wfile_t w; td_dirstream_t d; struct { uint16_t pos; uint8_t buf[D64_SECTOR]; } b;
+            struct { uint8_t kind, pos, len; uint8_t buf[TD_HFBUF]; } h; td_rel_t l; td_plain_t p; } u;
+} td_chan_t;
 
 /* Services the host (Teensy glue / test harness) provides for image selection.
  * Paths are passed through unconverted (PETSCII); the host converts. All optional. */
@@ -71,7 +71,7 @@ typedef struct {
     /* Host text files for the configuration utility (OPEN n,d,n,"!CONFIG" read, "!CONFIG,W" write, "!STATE" read only): the unit's disk
      * switching list (/tdrive-config.txt) and a two-line description of what the unit has mounted ("path", "folder"). The host
      * converts the text to / from PETSCII (a line ends with CR on the C64 side). Only one such file is open at a time on the host side.
-     * hf_open: kind VD_HF_CONFIG / VD_HF_STATE; 0 ok, else a DOS error code (62 when there is no such file to read). hf_read: up to n bytes,
+     * hf_open: kind TD_HF_CONFIG / TD_HF_STATE; 0 ok, else a DOS error code (62 when there is no such file to read). hf_read: up to n bytes,
      * 0 = end of file. hf_write: 0 ok. hf_close: after the last write the host should flush. All optional (a missing hf_open = 62). */
     int  (*hf_open)(void *ctx, int unit, int kind, int write);
     int  (*hf_read)(void *ctx, int unit, uint8_t *buf, int n);
@@ -92,8 +92,8 @@ typedef struct {
     /* S:NAME.D64 with nothing mounted: delete an image file in the current folder. 0 ok, else a DOS error: 62 no such file (tdrive.c
      * counts it as 0 scratched), 26 the file is read-only on the card (FAT attribute) or the card is not writable. */
     int  (*scratch)(void *ctx, int unit, const char *name);
-} vd_host_t;
-enum { VD_HF_CONFIG = 0, VD_HF_STATE = 1 };
+} td_host_t;
+enum { TD_HF_CONFIG = 0, TD_HF_STATE = 1 };
 
 struct tdrive_s;
 typedef struct {
@@ -103,22 +103,22 @@ typedef struct {
     d64_t   *disk;              /* NULL: no image mounted */
     uint8_t  present;           /* device answers on the bus */
     uint8_t  slot_of[16];       /* channel number -> pool slot + 1 (0 = not open) */
-    vd_chan_t slot[VD_NSLOT];
+    td_chan_t slot[TD_NSLOT];
     uint8_t  statbuf[48];       /* error channel (15) text */
     uint8_t  stat_len, stat_pos;
     uint8_t  err, err_t, err_s; /* DOS status */
-} vd_unit_t;
+} td_unit_t;
 
 typedef struct tdrive_s {
-    vd_host_t host;
-    vd_unit_t unit[2];
+    td_host_t host;
+    td_unit_t unit[2];
     uint8_t  dev[2];            /* IEC device number each unit answers to now; 0 = none (not claimed on the bus) */
     uint8_t  pin[2];            /* the number the user chose with U0> (kept in EEPROM); 0 = automatic */
     int8_t   act;               /* -1 none, 0/1 unit, 2 = absent device */
     uint8_t  talking;
     uint8_t  sa;
     uint8_t  wlen;
-    uint8_t  wbuf[VD_CMDBUF];
+    uint8_t  wbuf[TD_CMDBUF];
 } tdrive_t;
 
 void tdrive_init(tdrive_t *v);
@@ -127,7 +127,7 @@ void tdrive_attach(tdrive_t *v, int unit, d64_t *disk, int present);
  * behind the drive's back (a remote swap): the channels' state belongs to the old image. A listing by path being closed puts its
  * selection back (host pop). */
 void tdrive_close_unit(tdrive_t *v, int unit);
-/* pin0/pin1: device numbers the user fixed (8..30), 0 = automatic. Automatic units start on VD_DEV0/VD_DEV1 (or the next
+/* pin0/pin1: device numbers the user fixed (8..30), 0 = automatic. Automatic units start on TD_DEV0/TD_DEV1 (or the next
  * free number) and are moved by the start-up scan below. */
 void tdrive_set_devices(tdrive_t *v, uint8_t pin0, uint8_t pin1);
 /* Start-up scan (the KERNAL probes the real serial bus for 8,9,... after reset):
@@ -138,7 +138,7 @@ void tdrive_set_devices(tdrive_t *v, uint8_t pin0, uint8_t pin1);
 int  tdrive_scan_begin(tdrive_t *v);
 int  tdrive_scan_free(tdrive_t *v, uint8_t dev);
 int  tdrive_unit_for(const tdrive_t *v, uint8_t dev);                /* unit 0/1 serving this device number, or -1 */
-void tdrive_set_host(tdrive_t *v, const vd_host_t *host);
+void tdrive_set_host(tdrive_t *v, const td_host_t *host);
 int  tdrive_chan_mode(const tdrive_t *v, int unit, int ch);   /* 0 closed, 1 file-read, 3 file-write, 4 directory, 5 buffer, 6/7 host text, 8 REL, 9 plain file */
 int  tdrive_active(const tdrive_t *v);                        /* unit of the open bus transaction: 0/1, 2 absent device, -1 none */
 int  tdrive_pending_err(const tdrive_t *v, int unit);         /* DOS error code waiting on the status channel (0 = none) */
@@ -157,7 +157,7 @@ size_t tdrive_sizeof(void);
  * The end is the last word after ' ', '-', '_' or '.' when it has 1-5 characters, else the last 3 characters; the
  * extension (up to 3 characters after the last '.') stays. Every alias holds a '^'. The host decides about collisions.
  * Returns 0 = usable as is (out = name in upper case), 1 = out is an alias, -1 = empty name. */
-int vd_alias(const char *name, char out[17]);
+int td_alias(const char *name, char out[17]);
 
 #ifdef __cplusplus
 }

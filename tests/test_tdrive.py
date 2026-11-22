@@ -1,6 +1,6 @@
 import ctypes, pathlib, random, shutil, subprocess, sys, tempfile, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'tools'))
-from d64py import LIB, Disk, TDrive, VD_LISTEN, VD_TALK, VD_CIOUT, VD_ACPTR
+from d64py import LIB, Disk, TDrive, TD_LISTEN, TD_TALK, TD_CIOUT, TD_ACPTR
 
 
 def c1541(img, *args):
@@ -393,7 +393,7 @@ class TDriveTests(unittest.TestCase):
         self.assertEqual(self.cmd(b"B-P:7,0"), "70,NO CHANNEL,00,00\r")
 
     def test_buffer_channel_exhausts_the_pool_and_close_releases_it(self):
-        for ch in range(2, 9): self.vd.open(8, ch, b"#")           # VD_NSLOT = 6, so the 7th fails
+        for ch in range(2, 9): self.vd.open(8, ch, b"#")           # TD_NSLOT = 6, so the 7th fails
         self.assertEqual(self.vd.status(), "70,NO CHANNEL,00,00\r")
         self.vd.close(8, 2)
         self.vd.open(8, 2, b"#"); self.assertEqual(self.vd.status(), "00, OK,00,00\r")
@@ -462,15 +462,15 @@ class TDriveTests(unittest.TestCase):
 
     # ---- bus ownership ----
     def test_other_devices_not_mine(self):
-        nm, _, _ = self.vd.cmd(VD_LISTEN, 4)
+        nm, _, _ = self.vd.cmd(TD_LISTEN, 4)
         self.assertEqual(nm, 1)
-        nm, _, _ = self.vd.cmd(VD_CIOUT, 65)                            # real device mid-transaction
+        nm, _, _ = self.vd.cmd(TD_CIOUT, 65)                            # real device mid-transaction
         self.assertEqual(nm, 1)
 
     def test_absent_device_9_sets_nodev(self):
-        nm, _, st = self.vd.cmd(VD_LISTEN, 9)
+        nm, _, st = self.vd.cmd(TD_LISTEN, 9)
         self.assertEqual((nm, st), (0, 0x80))
-        self.assertEqual(self.vd.cmd(VD_CIOUT, 1)[0], 0)                # swallowed, not forwarded to real bus
+        self.assertEqual(self.vd.cmd(TD_CIOUT, 1)[0], 0)                # swallowed, not forwarded to real bus
 
     def test_no_disk_mounted_gives_not_ready(self):
         vd = TDrive(); vd.attach(0, None, present=True)
@@ -597,10 +597,10 @@ class BadSectorTests(unittest.TestCase):
 
 
 class Alias(unittest.TestCase):
-    """vd_alias: the C64 spelling of a host file name (docs/DESIGN.md 44)."""
+    """td_alias: the C64 spelling of a host file name (docs/DESIGN.md 44)."""
     def alias(self, name):
         out = ctypes.create_string_buffer(17)
-        r = LIB.vd_alias(name.encode("latin1"), out)
+        r = LIB.td_alias(name.encode("latin1"), out)
         return r, out.value.decode("latin1")
 
     def test_usable_names_stay(self):

@@ -1095,7 +1095,7 @@ class DeviceNumberTests(unittest.TestCase):
             first()
             self.assertEqual(self.io.stat, SCANREQ)
             self.assertEqual(self.io.r(R_DEV0), 8)                              # nothing happened yet
-            self.assertEqual(self.io.vd_act(), -1)                              # ... and no transaction is open
+            self.assertEqual(self.io.td_act(), -1)                              # ... and no transaction is open
         self.io.arm_scan()
         self.io.call(LISTEN, 8, allow_scan=True)                                # SCANREQ again (re-armed)
         self.assertEqual(self.scan({8}), 0)                                     # drive 8 is real
@@ -1257,7 +1257,7 @@ class FootprintTests(unittest.TestCase):
         self.assertEqual(d.count(b'"FILE'), 60)
 
     def test_channel_pool_exhaustion_and_recovery(self):
-        n = 6                                                         # VD_NSLOT default
+        n = 6                                                         # TD_NSLOT default
         for ch in range(2, 2 + n):
             self.io.call(LISTEN, 8); self.io.call(SECOND, 0xF0 | ch)
             for b in b"FILE00": self.io.call(CIOUT, b)

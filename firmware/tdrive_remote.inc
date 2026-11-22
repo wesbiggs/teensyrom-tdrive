@@ -36,7 +36,7 @@ FLASHMEM void TDriveRemoteCommand(bool Set)
       return;
    }
    int Unit = (Drive == rmtSD) ? 0 : 1;   //TDrive's own numbering: 0 = SD, 1 = USB
-   bool Running = VD_IsHandler(CurrentIOHandler);
+   bool Running = TD_IsHandler(CurrentIOHandler);
    char Msg[64];
    char Json[2 * MaxNamePathLength + 160];
    if (!Running)

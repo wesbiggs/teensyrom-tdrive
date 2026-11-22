@@ -1,11 +1,11 @@
 ; The TR mailbox: register layout, answer tokens and command numbers (d64/tdrive_io.h). Shared by the KERNAL patch
-; (patches/tdrive.s) and the plain TeensyROM's agent (vector/vdagent.s). MBX / WIN may be set with -D.
+; (patches/tdrive.s) and the plain TeensyROM's agent (vector/tdagent.s). MBX / WIN may be set with -D.
 ; Constants only: including it emits no bytes.
 .ifndef MBX
 MBX = $DE10
 .endif
-.ifndef VD_DMA_LOAD
-VD_DMA_LOAD = 1             ; 0: no DMA requests: LOAD asks for window blocks only (FLOAD_BLK), SAVE sends window blocks only, VERIFY takes
+.ifndef TD_DMA_LOAD
+TD_DMA_LOAD = 1             ; 0: no DMA requests: LOAD asks for window blocks only (FLOAD_BLK), SAVE sends window blocks only, VERIFY takes
                             ; the stock path, as in the upstream TeensyROM build (docs/DESIGN.md 49, 51)
 .endif
 .ifndef WIN
@@ -19,8 +19,8 @@ MBX_STAT = MBX+3
 MBX_ST   = MBX+4
 MBX_LEN  = MBX+5
 MBX_ID   = MBX+9
-VD_ID0   = $D6              ; VIO_ID0_VAL / VIO_ID1_VAL in d64/tdrive_io.h
-VD_ID1   = $64
+TD_ID0   = $D6              ; VIO_ID0_VAL / VIO_ID1_VAL in d64/tdrive_io.h
+TD_ID1   = $64
 STAT_OK      = $5A      ; answer tokens: exact values, so a misread can't pass for "done"
 STAT_NOTMINE = $A5
 STAT_SCAN    = $3C      ; "scan the serial bus first, then send this command again" (only ever answered to a LISTEN, TALK, fast LOAD / SAVE open)

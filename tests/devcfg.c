@@ -1,4 +1,4 @@
-/* Built with -DVD_DEV0=10 -DVD_DEV1=11 to prove the compile-time device numbers take effect. */
+/* Built with -DTD_DEV0=10 -DTD_DEV1=11 to prove the compile-time device numbers take effect. */
 #include "../d64/tdrive.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +8,6 @@ int main(void)
     tdrive_init(&v);
     int ok = tdrive_unit_for(&v, 10) == 0 && tdrive_unit_for(&v, 11) == 1 &&
              tdrive_unit_for(&v, 8) == -1 && tdrive_unit_for(&v, 9) == -1;
-    printf("%s compile-time VD_DEV0/VD_DEV1 = %d/%d\n", ok ? "PASS" : "FAIL", v.dev[0], v.dev[1]);
+    printf("%s compile-time TD_DEV0/TD_DEV1 = %d/%d\n", ok ? "PASS" : "FAIL", v.dev[0], v.dev[1]);
     return ok ? 0 : 1;
 }

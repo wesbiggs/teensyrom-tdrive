@@ -5,11 +5,11 @@
 ;
 ; BASIC's start-up message routine (INITMS, $E422, in the KERNAL chip) prints the banner string at $E473 (`JSR STROUT` at $E42D),
 ; the free bytes ($BDCD, no leading space), then " BASIC BYTES FREE" + CR ($E460, from $E43D) and ends in `JMP $A644` (NEW). The banner
-; string now ends after the top line and its two CRs; its `JSR` goes to vd_head, which prints it and then the start of the second line
-; (stock or ours), and $E43D jumps to vd_banner, which prints the rest of the line, the CR, and goes on to NEW.
+; string now ends after the top line and its two CRs; its `JSR` goes to td_head, which prints it and then the start of the second line
+; (stock or ours), and $E43D jumps to td_banner, which prints the rest of the line, the CR, and goes on to NEW.
 ;
 ; The mailbox is not live yet when this runs (the TR's menu handler owns IO1 until the program has been loaded), so the numbers
-; travel in the KERNAL image: vd_units, the two bytes after the tag "VDUNITS:" (not printed; VD_BannerUnits in firmware/IOH_TDrive.c
+; travel in the KERNAL image: td_units, the two bytes after the tag "TDUNITS:" (not printed; TD_BannerUnits in firmware/IOH_TDrive.c
 ; searches the image for it), are written by the firmware into the image it serves, before the C64 starts: per unit (SD, USB)
 ; $FE = absent, 8-30 = a fixed number (U0>), $FF = automatic. An automatic unit gets the first number from 8 up that nobody answers on
 ; the real serial bus and that the other unit has not fixed, SD first, which is what the bus scan of the run's first disk access
@@ -17,7 +17,7 @@
 ; hooks (iec_listen / iec_second / iec_unlsn). A unit with no number (absent, or every number taken) shows as "NOSD" / "NOUSB".
 ; The image as built says 0 / 0 (no TDrive firmware wrote it: plain Kernal Replace, an older firmware, or this KERNAL is in the
 ; machine itself, an EPROM or a MEGA65 core): then the same two bytes are taken from the TR menu's IO1 at $DE3C-$DE3F when the tag
-; $D6 $64 reads there (VD_BannerRegs; the menu prints the banner itself, under its own handler); else the stock line.
+; $D6 $64 reads there (TD_BannerRegs; the menu prints the banner itself, under its own handler); else the stock line.
 ;
 ; Code in reclaimed tape space $FB97-$FCD0 (tape-only routines: called only from tape code at $F8A1-$F8D6 and from the tape
 ; code tdrive.s already reclaimed). Zero page $FB-$FE: no program is running yet.
@@ -33,21 +33,21 @@ CHROUT = $FFD2
 NEW    = $A644
 S_FREE = $E460              ; stock " BASIC BYTES FREE", CR
 S_RAM_STOCK = $E49A         ; stock " 64K RAM SYSTEM  ", 0 (its first byte is now the 0 that ends the top lines; tools/build.py checks the rest)
-MENU_REGS = $DE3C           ; the TR menu's IO1 offsets 60-63 (VD_BannerRegs in firmware/IOH_TDrive.c)
+MENU_REGS = $DE3C           ; the TR menu's IO1 offsets 60-63 (TD_BannerRegs in firmware/IOH_TDrive.c)
 
 .segment "P_E42D"
-        jsr vd_head             ; was JSR STROUT (the banner string at $E473)
+        jsr td_head             ; was JSR STROUT (the banner string at $E473)
 .segment "P_E43D"
-        jmp vd_banner           ; was LDA #<S_FREE / LDY #>S_FREE / JSR STROUT / JMP NEW
+        jmp td_banner           ; was LDA #<S_FREE / LDY #>S_FREE / JSR STROUT / JMP NEW
 .segment "P_E49A"
         .byte 0                 ; the banner string at $E473 ends after the top line and its two CRs (was " 64K RAM SYSTEM  ", 0)
 
 .segment "P_FB97"
 ; the top lines (A/Y = the string at $E473), then the start of the second line
-vd_head:
+td_head:
         jsr STROUT
         ldx #1                  ; the unit bytes the firmware wrote into the image it serves...
-@img:   lda vd_units,x
+@img:   lda td_units,x
         sta RES,x
         dex
         bpl @img
@@ -80,7 +80,7 @@ have_fw:
         rts
 
 ; after the free bytes: the rest of the second line, CR, NEW
-vd_banner:
+td_banner:
         jsr have_fw
         bne @vd
         lda #<S_FREE            ; the stock ending, CR included
@@ -91,7 +91,7 @@ vd_banner:
         sta N
         ldx #0
 @unit:  stx UNIT
-        lda RES,x               ; the unit's byte (vd_head copied them here); replaced by its result below
+        lda RES,x               ; the unit's byte (td_head copied them here); replaced by its result below
         cmp #$FF
         bne @keep               ; fixed, or absent ($FE / 0: not 8-30, shown as "NO..")
 @try:   inc N                   ; automatic: the next number that is free
@@ -192,8 +192,8 @@ s_sd:   .byte "SD", 0
 s_usb:  .byte "USB", 0
 names:  .byte <s_sd, <s_usb
 .assert >s_sd = >s_usb, error, "name expects SD and USB in one page"
-        .byte "VDUNITS:"        ; the tag the firmware finds vd_units by
-vd_units:
+        .byte "TDUNITS:"        ; the tag the firmware finds td_units by
+td_units:
         .byte 0, 0              ; written by the firmware: SD, USB ($FE absent, 8-30 fixed, $FF automatic; 0 0 = not written)
-vd_banner_end:
-.assert vd_banner_end <= $FCD1, lderror, "banner code overflows the reclaimed tape routines into $FCD1 (used by serial SAVE)"
+td_banner_end:
+.assert td_banner_end <= $FCD1, lderror, "banner code overflows the reclaimed tape routines into $FCD1 (used by serial SAVE)"

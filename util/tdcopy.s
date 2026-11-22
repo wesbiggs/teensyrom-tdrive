@@ -114,8 +114,8 @@ start:
         lda #8
         jsr probe               ; the KERNAL build: the first bus access also runs the tdrive scan that numbers the units
         lda #0
-        sta VD0
-        sta VD1
+        sta TD0
+        sta TD1
         jsr findmb              ; which TDrive handler answers, if any (P1 = its registers)
         bcs @nodv
         bit AGENT
@@ -129,7 +129,7 @@ start:
         cmp #31
         bcc @ok
 @no:    lda #0
-@ok:    sta VD0,x
+@ok:    sta TD0,x
         dey
         dex
         bpl @dv
@@ -139,7 +139,7 @@ start:
         sta BORDER
         lda THEME
         sta BGCOL
-        lda VD0
+        lda TD0
         bne @dok
         lda #9
 @dok:   sta DU                  ; destination default: the SD unit
@@ -182,29 +182,29 @@ banner: PS {C_NAME, $93, C_BAN, 18, "                TDCOPY                 ", 1
 
 ; "TDRIVE: SD UNIT 8  USB UNIT 9" / "TDRIVE: NOT ACTIVE"
 punits: PS {C_SRC, "TDRIVE: "}
-        lda VD0
-        ora VD1
+        lda TD0
+        ora TD1
         bne @a
         PS {C_TIME, "NOT ACTIVE", 13}
         rts
-@a:     lda VD0
+@a:     lda TD0
         beq @u
         PS {"SD UNIT ", C_NAME}
-        lda VD0
+        lda TD0
         jsr pbyte0
         PS {C_SRC, "  "}
-@u:     lda VD1
+@u:     lda TD1
         beq @e
         PS {"USB UNIT ", C_NAME}
-        lda VD1
+        lda TD1
         jsr pbyte0
 @e:     CR
         rts
 
 ; Z set when unit A is a tdrive unit
-isvd:   cmp VD0
+isvd:   cmp TD0
         beq @y
-        cmp VD1
+        cmp TD1
 @y:     rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
@@ -387,7 +387,7 @@ probe:  ldx #0
         rts
 
 ; Which registers: the KERNAL build's (MBXK) when its ID bytes read $D6 $64, else the agent's (MBXA) when its do. Reads only: under the
-; agent IO1 is its code, under the TR menu's own handler $DE11 / $DE15 are EEPROM-backed settings. Four tries, as the KERNAL's vd_here
+; agent IO1 is its code, under the TR menu's own handler $DE11 / $DE15 are EEPROM-backed settings. Four tries, as the KERNAL's td_here
 ; (a late answer reads a mixed byte). C=0 found: P1 = the base, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
 findmb: ldx #4
 @try:   lda MBXK+M_ID0
@@ -2226,9 +2226,9 @@ sendcmd:jsr CHKOUT
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; THEME = the TR menu's colour references from the third line of "!STATE" on a tdrive unit (all seven hex digits or none)
 readtheme:
-        lda VD0
+        lda TD0
         bne @d
-        lda VD1
+        lda TD1
         bne @d
         rts
 @d:     sta T2
@@ -2361,8 +2361,8 @@ RESN:   .res 2
 RESRS:  .res 1
 RESWS:  .res 1
 RESEP:  .res 1
-VD0:    .res 1          ; the tdrive units (VD1 right after VD0)
-VD1:    .res 1
+TD0:    .res 1          ; the tdrive units (TD1 right after TD0)
+TD1:    .res 1
 AGENT:  .res 1          ; $80: the agent's registers (findmb)
 SDV:    .res 1          ; agscan: the number being probed
 MW0:    .res 1          ; mcall: the wait count

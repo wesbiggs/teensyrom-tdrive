@@ -2,7 +2,7 @@
 # Firmware: three hex files with tools/build_firmware.sh (the TeensyROM commit in firmware/UPSTREAM + firmware/teensyrom-tdrive.patch,
 # TeensyROM's own build script):
 #   tr           TeensyROM_<ver>_full.hex        plain TR, without DMA LOAD
-#   tr-plus      TeensyROM+_<ver>_full.hex       TR+, without DMA LOAD (the VD_DMA_LOAD=0 build, docs/DESIGN.md 49)
+#   tr-plus      TeensyROM+_<ver>_full.hex       TR+, without DMA LOAD (the TD_DMA_LOAD=0 build, docs/DESIGN.md 49)
 #   tr-plus-dma  TeensyROM+_<ver>-DMA_full.hex   TR+ with DMA LOAD (Fab04_TDriveDMALoad; the version on the menu reads <ver>-DMA)
 # The plain TR hex has no TDrive yet (TDrive sits under Fab04_KernalReplace, TR+ only); it is built so the release carries both boards' files.
 # Test files (tools/make_testdisk.py, tests/basic/README.md), to copy to the root of the SD card or USB stick:
@@ -48,7 +48,7 @@ jobs:
             ~/Arduino/libraries
           key: arduino-teensy-1.61.0-crc32-2.0.1
 
-      # ca65/ld65: the builds without DMA LOAD rebuild the KERNAL table with tools/build.py -D VD_DMA_LOAD=0
+      # ca65/ld65: the builds without DMA LOAD rebuild the KERNAL table with tools/build.py -D TD_DMA_LOAD=0
       - name: Install cc65
         run: sudo apt-get update -qq && sudo apt-get install -y -qq cc65
 

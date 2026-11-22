@@ -49,14 +49,14 @@ enum { VIO_CMD = 0, VIO_ARG = 1, VIO_DATA = 2, VIO_STAT = 3, VIO_ST = 4, VIO_LEN
  * resets the C64 too, while the menu's own IO1 handler still answers: its $DE19/$DE1A are a SID's init address (0 without a SID),
  * and no tune starts in I/O space, so $D6xx never shows there. Unanswered, the bus floats to $DE. Do not move them down onto the unused
  * offset 8: the menu's $DE18 is the last search letter (a shifted V is $D6) and its $DE19 the init address's high byte ($64 for a tune
- * at $64xx), a pair that could pass for the IDs (and the mailbox gate vd_here would then write the menu's EEPROM registers). */
+ * at $64xx), a pair that could pass for the IDs (and the mailbox gate td_here would then write the menu's EEPROM registers). */
 #define VIO_ID0_VAL 0xD6
 #define VIO_ID1_VAL 0x64
 #define VIO_WIN     128   /* window size: names, fast LOAD / SAVE blocks (a power of two, see vio_io2_read) */
 #define VIO_WIN_OFS 0x80  /* the window starts at IO2 + this ($DF80) */
 #define VIO_SCANREQ 0x3C   /* answer to the first LISTEN / TALK / fast LOAD / fast SAVE of a run: "scan the bus, then ask again" (see VIO_SCAN) */
 
-/* Commands 1..8 are VD_LISTEN..VD_UNTLK (byte-level). Fast paths: */
+/* Commands 1..8 are TD_LISTEN..TD_UNTLK (byte-level). Fast paths: */
 enum {
     VIO_FLOAD_OPEN = 9,    /* ARG=device, window[0..LEN) = name (LEN < VIO_WIN). DATA: 0 ok (window[0..1] = load address), 4 not found, 5 no device */
     VIO_FLOAD_BLK  = 10,   /* DATA = byte count (0..VIO_WIN) now in window; ST=$40 on the last block */

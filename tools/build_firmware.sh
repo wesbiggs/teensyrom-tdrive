@@ -2,8 +2,8 @@
 # Build a release firmware hex: the TeensyROM commit named in firmware/UPSTREAM, firmware/teensyrom-tdrive.patch applied,
 # built with TeensyROM's own tools/build-firmware.mjs.
 # usage: tools/build_firmware.sh tr|tr-plus|tr-plus-dma [outdir] [--install-toolchain]
-#   tr, tr-plus: without DMA LOAD, as the VD_DMA_LOAD=0 patch (docs/DESIGN.md 49): Fab04_TDriveDMALoad taken out again and the KERNAL table
-#     (vd_kpatch.h) rebuilt with tools/build.py -D VD_DMA_LOAD=0 (needs ca65/ld65). TeensyROM+_<ver>_full.hex, TeensyROM_<ver>_full.hex.
+#   tr, tr-plus: without DMA LOAD, as the TD_DMA_LOAD=0 patch (docs/DESIGN.md 49): Fab04_TDriveDMALoad taken out again and the KERNAL table
+#     (td_kpatch.h) rebuilt with tools/build.py -D TD_DMA_LOAD=0 (needs ca65/ld65). TeensyROM+_<ver>_full.hex, TeensyROM_<ver>_full.hex.
 #   tr-plus-dma: the committed patch as it is (DMA LOAD on), version <ver>-DMA (menu title and TeensyROM+_<ver>-DMA_full.hex).
 #   outdir defaults to build/firmware; the TeensyROM tree goes to build/teensyrom-<target> (fresh every run).
 #   --install-toolchain: arduino-cli (TeensyROM's installer), teensy:avr@1.61.0 and CRC32@2.0.1 (CI; skip it on a machine already set up).
@@ -37,7 +37,7 @@ assert n == 1 and "#define Fab04_TDriveDMALoad" in s, "TRVersion / Fab04_TDriveD
 open(p, "w").write(s)
 PY
 else
-  # what VD_DMA_LOAD=0 tools/make_tr_patch.sh writes: no Fab04_TDriveDMALoad, the KERNAL table without the DMA request
+  # what TD_DMA_LOAD=0 tools/make_tr_patch.sh writes: no Fab04_TDriveDMALoad, the KERNAL table without the DMA request
   python3 -I - "$C/Common_Defs.h" <<'PY'
 import re, sys
 p = sys.argv[1]; s = open(p).read()
@@ -45,7 +45,7 @@ s, n = re.subn(r'^[ \t]*#define Fab04_TDriveDMALoad\b.*\n', '', s, flags=re.M)
 assert n == 1, "Fab04_TDriveDMALoad define not found"
 open(p, "w").write(s)
 PY
-  python3 -I "$HERE/tools/build.py" --table "$C/tdrive/vd_kpatch.h" -D VD_DMA_LOAD=0
+  python3 -I "$HERE/tools/build.py" --table "$C/tdrive/td_kpatch.h" -D TD_DMA_LOAD=0
 fi
 # Committed so the tree is clean: the build date comes from the commit, and newer upstream build scripts mark a dirty tree's version ('*', -dirty).
 git add -A
