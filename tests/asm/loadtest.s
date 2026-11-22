@@ -60,7 +60,7 @@ SP       = $A4              ; $A4/$A5: puts' string pointer (serial scratch too)
 .endmacro
 
 .segment "CODE"
-start:                          ; VDSUITE calls it by SYS through the jump table in tests/asm/suite.s
+start:                          ; TDSUITE calls it by SYS through the jump table in tests/asm/suite.s
         lda #0
         sta FAILS
         lda #1

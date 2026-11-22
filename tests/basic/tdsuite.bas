@@ -1,4 +1,4 @@
-0 rem vdsuite: the hardware checklist in one program (tests/basic/README.md)
+0 rem tdsuite: the hardware checklist in one program (tests/basic/README.md)
 5 if peek(65533)=252 then poke55,0:poke56,96:clr:rem c64: basic ends at $6000 (reutest, soak above)
 10 print chr$(147);"tdrive test suite"
 20 d=8:input"device";d:open15,d,15
@@ -54,8 +54,8 @@
 1000 rem setup: the scratch folder and its three images
 1010 c$="cd:/":gosub 850:t$="cd:/ to the card root":x=(en=0):gosub 700
 1015 l$="$":n$="":gosub 600:t$="the root lists as "+h$:x=(left$(h$,3)="sd:" or left$(h$,4)="usb:"):gosub 700
-1020 c$="md:vdscratch":gosub 850:t$="md:vdscratch (or there)":x=(en=0 or en=63):gosub 700
-1030 c$="cd:vdscratch":gosub 850:t$="cd:vdscratch":x=(en=0):gosub 700
+1020 c$="md:tdscratch":gosub 850:t$="md:tdscratch (or there)":x=(en=0 or en=63):gosub 700
+1030 c$="cd:tdscratch":gosub 850:t$="cd:tdscratch":x=(en=0):gosub 700
 1040 for k=1 to 3:gosub 1500:t$=im$(k)+" mounted":x=(en=0):gosub 700
 1050 c$="cd:_":gosub 850:next
 1055 c$="cd:nowhere.d64":gosub 850:t$="missing image (62)":x=(en=62):gosub 700
@@ -69,7 +69,7 @@
 1550 if ti-t0<1200 then 1550
 1560 gosub 900:print"n: took";int(tm/.6)/100;"s (limit 1.6), st";s:return
 1600 rem the scratch folder, nothing mounted
-1610 c$="cd:/":gosub 850:c$="md:vdscratch":gosub 850:c$="cd:vdscratch":gosub 850:return
+1610 c$="cd:/":gosub 850:c$="md:tdscratch":gosub 850:c$="cd:tdscratch":gosub 850:return
 2000 rem one image: format, seq, dos commands, blocks, rel
 2010 k=sn-1:gosub 1600:gosub 1500:t$="mount "+im$(k):x=(en=0):gosub 700
 2020 c$="n:"+dn$(k):gosub 850:t$="quick format":x=(en=0):gosub 700
@@ -131,8 +131,8 @@
 2900 l$="$":n$="":gosub 600:t$="blocks free back to"+str$(fr(k)):x=(fb=fr(k)):gosub 700
 2910 c$="v":gosub 850:gosub 600:t$="validate keeps them":x=(en=0 and fb=fr(k)):gosub 700
 2920 c$="cd:_":gosub 850:goto 400
-5000 rem bad sectors: vdbad.d64 in the card root
-5010 c$="cd:/":gosub 850:c$="cd:vdbad.d64":gosub 850:t$="mount vdbad.d64":x=(en=0):gosub 700
+5000 rem bad sectors: tdbad.d64 in the card root
+5010 c$="cd:/":gosub 850:c$="cd:tdbad.d64":gosub 850:t$="mount tdbad.d64":x=(en=0):gosub 700
 5020 if en then 400
 5030 open3,d,3,"#":c$="u1:3,0,30,5":gosub 850:t$="u1 on a bad sector (21,30,5)":x=(en=21 and et=30 and es=5):gosub 700
 5040 c$="u1:3,0,30,4":gosub 850:t$="u1 on a good one":x=(en=0):gosub 700
@@ -146,18 +146,18 @@
 5220 next:t$="load stops at the bad sector, st"+str$(s):x=(e=0 and (s and 2)=2):gosub 700
 5230 t$="status after the load (23)":x=(en=23):gosub 700
 5240 c$="cd:/":gosub 850:goto 400
-6000 rem card files with nothing mounted: vdplain.prg in the root, md/rd in vdscratch
-6010 c$="cd:/":gosub 850:open2,d,2,"vdplain.prg":gosub 900:n=0:e=0
+6000 rem card files with nothing mounted: tdplain.prg in the root, md/rd in tdscratch
+6010 c$="cd:/":gosub 850:open2,d,2,"tdplain.prg":gosub 900:n=0:e=0
 6020 get#2,a$:s=st:if n>1 then j=n-2:if asc(a$+chr$(0))<>(j*7+3)-int((j*7+3)/256)*256 then e=e+1
 6030 n=n+1:if s=0 and n<700 then 6020
 6040 close2:t$="plain file opens":x=(en=0):gosub 700
 6050 t$="602 bytes, eoi last":x=(n=602 and e=0 and (s and 64)=64):gosub 700
-6060 n$="vdplain":gosub 820:t$="name without .prg":x=(en=0):gosub 700
-6070 n$="vdpl*":gosub 820:t$="pattern":x=(en=0):gosub 700
+6060 n$="tdplain":gosub 820:t$="name without .prg":x=(en=0):gosub 700
+6070 n$="tdpl*":gosub 820:t$="pattern":x=(en=0):gosub 700
 6080 n$="nofile.prg":gosub 820:t$="missing file (62)":x=(en=62):gosub 700
 6090 open2,d,2,"vsx,s,w":gosub 900:close2:t$="no writing (74)":x=(en=74):gosub 700
-6100 gosub 1600:n$="/vdplain.prg":gosub 820:t$="path from the root":x=(en=0):gosub 700
-6110 l$="$":n$="vdscratch":gosub 600:t$="its folder stays selected":x=fd:gosub 700
+6100 gosub 1600:n$="/tdplain.prg":gosub 820:t$="path from the root":x=(en=0):gosub 700
+6110 l$="$":n$="tdscratch":gosub 600:t$="its folder stays selected":x=fd:gosub 700
 6200 gosub 1600:k=1:gosub 1500:c$="cd:_":gosub 850
 6210 c$="md:t1":gosub 850:t$="md:t1":x=(en=0):gosub 700
 6220 l$="$":n$="t1":gosub 600:t$="t1 listed":x=fd:gosub 700
@@ -171,60 +171,60 @@
 6300 c$="cd:vs64.d64":gosub 850:c$="md:t1":gosub 850:t$="md with an image mounted (31)":x=(en=31):gosub 700
 6310 c$="cd:_":gosub 850:c$="md:t2":gosub 850:c$="cd:t2":gosub 850:c$="s:e.d64":gosub 850:c$="n:e.d64,ee":gosub 850
 6320 c$="cd:_":gosub 850:c$="cd:..":gosub 850:c$="rd:t2":gosub 850:t$="rd, folder not empty (63)":x=(en=63):gosub 700
-6330 c$="cd:/":gosub 850:for i=0 to 1023:poke 49152+i,0:next:n$="vdplain.prg":gosub 950
+6330 c$="cd:/":gosub 850:for i=0 to 1023:poke 49152+i,0:next:n$="tdplain.prg":gosub 950
 6500 e=0:for j=0 to 599:if peek(49152+j)<>(j*7+3)-int((j*7+3)/256)*256 then e=e+1
 6510 next:t$="load of a plain file, st"+str$(s):x=(e=0 and peek(49752)=0 and (s and 191)=0):gosub 700
 6520 goto 400
-7000 rem cmd hd path syntax, from the root and in vdscratch
+7000 rem cmd hd path syntax, from the root and in tdscratch
 7010 gosub 1600:k=1:gosub 1500:c$="s:vskeep":gosub 850:open2,d,2,"vskeep,s,w":print#2,"keep":close2:c$="cd:_":gosub 850
 7020 c$="cd//":gosub 850:t$="cd// (the root)":x=(en=0):gosub 700
-7030 l$="$":n$="vdscratch":gosub 600:t$="root listed":x=fd:gosub 700
-7040 c$="cd//vdscratch":gosub 850:t$="cd//vdscratch":x=(en=0):gosub 700
-7050 n$="vs64.d64":gosub 600:t$="vdscratch listed":x=fd:gosub 700
+7030 l$="$":n$="tdscratch":gosub 600:t$="root listed":x=fd:gosub 700
+7040 c$="cd//tdscratch":gosub 850:t$="cd//tdscratch":x=(en=0):gosub 700
+7050 n$="vs64.d64":gosub 600:t$="tdscratch listed":x=fd:gosub 700
 7060 c$="cd/":gosub 850:gosub 600:t$="cd/ stays":x=(en=0 and fd):gosub 700
-7070 c$="md//vdscratch/:cm":gosub 850:t$="md//vdscratch/:cm":x=(en=0):gosub 700
+7070 c$="md//tdscratch/:cm":gosub 850:t$="md//tdscratch/:cm":x=(en=0):gosub 700
 7080 c$="cd/cm":gosub 850:gosub 600:t$="cd/cm (relative)":x=(en=0 and fd=0):gosub 700
-7090 c$="cd//vdscratch":gosub 850:c$="rd/cm":gosub 850:t$="rd/cm":x=(en=0):gosub 700
+7090 c$="cd//tdscratch":gosub 850:c$="rd/cm":gosub 850:t$="rd/cm":x=(en=0):gosub 700
 7100 n$="cm":gosub 600:t$="cm gone":x=(fd=0):gosub 700
-7110 c$="cd//":gosub 850:a$="":open2,d,2,"//vdscratch/vs64.d64/:vskeep,s,r":gosub 900:if en=0 then input#2,a$
+7110 c$="cd//":gosub 850:a$="":open2,d,2,"//tdscratch/vs64.d64/:vskeep,s,r":gosub 900:if en=0 then input#2,a$
 7120 close2:t$="a file by cmd path":x=(a$="keep"):gosub 700
-7130 c$="cd:/":gosub 850:l$="$//vdscratch/:vs*":n$="vs64.d64":gosub 600:t$="$//vdscratch/:vs*":x=fd:gosub 700
-7140 l$="$":n$="vdscratch":gosub 600:t$="still at the root":x=fd:gosub 700
-7150 c$="n//vdscratch/:vscmd.d64,cm":gosub 850:t$="n// (63: made before)":x=(en=0 or en=63):gosub 700
+7130 c$="cd:/":gosub 850:l$="$//tdscratch/:vs*":n$="vs64.d64":gosub 600:t$="$//tdscratch/:vs*":x=fd:gosub 700
+7140 l$="$":n$="tdscratch":gosub 600:t$="still at the root":x=fd:gosub 700
+7150 c$="n//tdscratch/:vscmd.d64,cm":gosub 850:t$="n// (63: made before)":x=(en=0 or en=63):gosub 700
 7160 c$="cd:/":gosub 850:goto 400
 8000 rem clean up: the scratch images deleted with s:, the folders with rd:
 8010 gosub 1600:c$="s:t2/e.d64":gosub 850:t$="s: an image in a folder":x=(en=1):gosub 700
 8020 c$="s:nofile.d64":gosub 850:t$="a missing image counts 0":x=(en=1 and et=0):gosub 700
 8030 c$="s:vs*.d64":gosub 850:t$="no patterns (33)":x=(en=33):gosub 700
-8040 c$="s:/vdplain.prg":gosub 850:t$="images only (64)":x=(en=64):gosub 700
-8050 c$="s//vdscratch/:vscmd.d64":gosub 850:t$="s// cmd path":x=(en=1):gosub 700
+8040 c$="s:/tdplain.prg":gosub 850:t$="images only (64)":x=(en=64):gosub 700
+8050 c$="s//tdscratch/:vscmd.d64":gosub 850:t$="s// cmd path":x=(en=1):gosub 700
 8060 c$="s:vs64.d64,vs71.d71,vs81.d81":gosub 850:t$="the three images":x=(en=1):gosub 700
 8070 l$="$":n$="vs64.d64":gosub 600:t$="images gone":x=(fd=0 and fb>=0):gosub 700
 8080 c$="rd:t2":gosub 850:t$="rd:t2":x=(en=0 or en=62):gosub 700
-8090 c$="cd:/":gosub 850:c$="rd:vdscratch":gosub 850:t$="rd:vdscratch":x=(en=0):gosub 700
-8100 n$="vdscratch":gosub 600:t$="the root without it":x=(fd=0):gosub 700
+8090 c$="cd:/":gosub 850:c$="rd:tdscratch":gosub 850:t$="rd:tdscratch":x=(en=0):gosub 700
+8100 n$="tdscratch":gosub 600:t$="the root without it":x=(fd=0):gosub 700
 8110 goto 400
 9000 print chr$(147);"checks by hand (see tests/basic/readme)"
 9010 print"- 16 status text: run it on a 1541 too":print"  (device 8 there), compare the texts"
-9015 print"- with vdtest.d64 mounted:"
+9015 print"- with tdtest.d64 mounted:"
 9020 print"- run/stop during load"chr$(34)"big"chr$(34)",8,1:":print"  break, then load"chr$(34)"$"chr$(34)",8 works"
 9030 print"- load"chr$(34)"hello"chr$(34)" with no device number"
 9040 print"- tdrive+reu: reu-checker says 512 kb":print"  with an image mounted"
-9050 print"- vdcopy: sd to 1541 and back"
+9050 print"- tdcopy: sd to 1541 and back"
 9055 print"- s: on an image made read-only on a":print"  pc: 26, the file stays"
 9060 print"- d81 time: setup prints it the first":print"  time it makes vs81.d81"
-9070 print"- dmatest (on vdtest.d64) with":print"  tools/dmatest.py on the host"
+9070 print"- dmatest (on tdtest.d64) with":print"  tools/dmatest.py on the host"
 9090 input"return for menu";z$:goto 100
 9500 rem mc = the jump table of the machine code after this program (tests/asm/suite.s), 0 if missing
 9510 mc=peek(45)+256*peek(46)-12:if peek(65533)<>252 then mc=0:print"c64 only":return
-9520 if peek(mc-2)<>86 or peek(mc-1)<>68 then mc=0:print"machine code missing: load vdsuite again"
+9520 if peek(mc-2)<>86 or peek(mc-1)<>68 then mc=0:print"machine code missing: load tdsuite again"
 9530 return
 10000 rem bus stress (bustest): mailbox registers and window at full speed, no commands; about a minute
 10010 gosub 9500:if mc=0 then 400
 10020 sys mc:e=peek(820)+256*peek(821):t$="no wrong read ("+mid$(str$(e),2)+")":x=(e=0 and peek(822)=0):gosub 700:goto 400
-11000 rem load test (loadtest): lda000 and ldd000 from vdtest.d64 in the card root, under basic and across $d000
+11000 rem load test (loadtest): lda000 and ldd000 from tdtest.d64 in the card root, under basic and across $d000
 11010 gosub 9500:if mc=0 then 400
-11020 c$="cd:/":gosub 850:c$="cd:vdtest.d64":gosub 850:t$="mount vdtest.d64 (card root)":x=(en=0):gosub 700:if en then 400
+11020 c$="cd:/":gosub 850:c$="cd:tdtest.d64":gosub 850:t$="mount tdtest.d64 (card root)":x=(en=0):gosub 700:if en then 400
 11030 poke 186,d:sys mc+3:t$="every byte, the guards, the end":x=(peek(820)=0):gosub 700:c$="cd:/":gosub 850:goto 400
 12000 rem ram under rom (vaulttest): $d000-$feff with $01=$34, as quest for the king uses it
 12010 gosub 9500:if mc=0 then 400

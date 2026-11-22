@@ -26,6 +26,11 @@
 ### Build
 - The GitHub repository is now `wesbiggs/teensyrom-tdrive` (was `teensyrom-vdrive`; GitHub redirects the old URL). The README's
   install line, the build tools and the comments the patch carries into the TeensyROM tree use the new name (no behaviour change of its own).
+- The utilities and test files are renamed from `vd*` to `td*`: `VDCOPY` is `TDCOPY` (`util/tdcopy.s`, `build/util/tdcopy.prg`), TDrive Config's
+  source is `util/tdconfig.s` (on the test disk as `TDCONFIG`; in the TeensyROM tree `tdconfig.prg.h`), `VDSUITE` is `TDSUITE`
+  (`tests/basic/tdsuite.bas`, scratch folder `TDSCRATCH`), and the test files are `tdtest.d64`, `tdbad.d64` and `tdplain.prg` (also the
+  release assets). `make test-tdconfig` / `make test-tdcopy` (`tests/test_tdconfig.py`, `tests/test_tdcopy.py`). Copy the new test files to
+  the card; the old `vd*` ones can be deleted (with a left-over `/VDSCRATCH` folder). The firmware's behaviour is unchanged.
 
 ## v0.9.0.73
 

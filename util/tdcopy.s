@@ -1,4 +1,4 @@
-; VDCOPY: copy files or whole disks between any two drive units (real IEC drives, SD, USB), entirely in machine code.
+; TDCOPY: copy files or whole disks between any two drive units (real IEC drives, SD, USB), entirely in machine code.
 ; Loads at $0801 with a BASIC "10 SYS 2061" stub. A menu offers:
 ; F  files: asks for a source and a destination unit, lists the source disk (PRG, SEQ, USR) and copies the selected files 2 KB at a
 ;    time through the KERNAL (CHKIN/CHRIN from the source, CHKOUT/CHROUT to the destination), checking the destination's error channel
@@ -173,7 +173,7 @@ menu:   jsr banner
         rts
 
 ; clear the screen and draw the banner across row 0 (its 40th column straight into the screen: printing it would link rows 0 and 1)
-banner: PS {C_NAME, $93, C_BAN, 18, "                VDCOPY                 ", 146, 13}
+banner: PS {C_NAME, $93, C_BAN, 18, "                TDCOPY                 ", 146, 13}
         lda #$A0
         sta SCREEN+39
         lda THEME+2

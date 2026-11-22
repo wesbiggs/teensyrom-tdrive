@@ -1,7 +1,7 @@
 ; Bus stress test for the TR+ mailbox (IO1 $DE10..) and window (IO2 $DF80..). Raw 6502 accesses at full speed, no commands are sent:
 ; it only uses registers that read back what was written (ARG, LEN), the idle STAT token and the 128-byte window.
 ; Output per test: error count (hex) and the OR of all wrong bit patterns (hex). Zero errors everywhere = the bus handlers keep up.
-; Part of VDSUITE (section 11): the totals stay at TOT (wrong reads of all tests, 16 bits, stops at $FFFF) and ANY (OR of every wrong bit pattern).
+; Part of TDSUITE (section 11): the totals stay at TOT (wrong reads of all tests, 16 bits, stops at $FFFF) and ANY (OR of every wrong bit pattern).
 .ifndef MBX
 MBX      = $DE10
 .endif
@@ -21,7 +21,7 @@ tmp      = $FE
 rep      = $FF
 
 .segment "CODE"
-start:                          ; VDSUITE calls it by SYS through the jump table in tests/asm/suite.s
+start:                          ; TDSUITE calls it by SYS through the jump table in tests/asm/suite.s
         lda #0
         sta TOT
         sta TOT+1

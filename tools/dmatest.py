@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host side of DMATEST (tests/asm/dmatest.s): DMA-write a pattern into C64 RAM with the TR+'s remote WriteC64Mem, round after round.
 
-Start DMATEST on the C64 first (it is on build/testdisk/vdtest.d64), then:
+Start DMATEST on the C64 first (it is on build/testdisk/tdtest.d64), then:
     tools/dmatest.py -H 192.168.1.50 --rounds 50
 Each round writes $2000-$3FFF, $A000-$BFFF, $C000-$CFFF and $E000-$FEFF (28.4 KB) with a new seed, then SEED/ROUND at $03F0;
 the C64 checks every byte and shows the counts. A clean run: every ERRS column 0000, ROM SUM 0000, OVERRUN 0000.

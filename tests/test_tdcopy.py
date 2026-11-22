@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VDCOPY (util/vdcopy.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against the real drive code.
+"""TDCOPY (util/tdcopy.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against the real drive code.
 
 Both units are d64/tdrive.c through libd64: unit 8 plays the real floppy drive (the program only knows the tdrive units from its device registers,
 and those say 9), unit 9 is the SD card with a host folder behind it (CD: mounts, N:NAME.D64 creates, "!STATE" gives the TR menu's
@@ -10,7 +10,7 @@ import ctypes, pathlib, subprocess, sys, tempfile, unittest
 try:
     import py65  # noqa: F401
 except ImportError:
-    print("SKIP py65 not installed (pip install py65): VDCOPY not run"); sys.exit(0)
+    print("SKIP py65 not installed (pip install py65): TDCOPY not run"); sys.exit(0)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests")); sys.path.insert(0, str(ROOT / "tools"))
@@ -121,7 +121,7 @@ class T(unittest.TestCase):
     def test_menu(self):
         self.assertEqual(self.start(), "key")
         t = self.text()
-        self.assertIn("VDCOPY", self.row(0))
+        self.assertIn("TDCOPY", self.row(0))
         self.assertIn("TDRIVE: SD UNIT 9", t)
         self.assertIn(" F  COPY FILES", t)
         self.assertIn(" D  COPY A WHOLE DISK, SECTOR BY SECTOR", t)
