@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build build/util/vdcopy.prg from util/vdcopy.s and "build/util/TDrive Config.prg" from util/vdconfig.s (both all machine code, loading at
-$0801 with a BASIC SYS stub; their tables are BSS, not in the PRG: from $2800 for VDCOPY, $2200 for TDrive Config).
+"""Build build/util/tdcopy.prg from util/tdcopy.s and "build/util/TDrive Config.prg" from util/tdconfig.s (both all machine code, loading at
+$0801 with a BASIC SYS stub; their tables are BSS, not in the PRG: from $2800 for TDCOPY, $2200 for TDrive Config).
 
 usage: make_util.py [OUTDIR]       (needs ca65/ld65)
-build(outdir) returns the path of the VDCOPY PRG (also used by make_testdisk.py and tdrive_mock.py); build_config(outdir) the other one.
+build(outdir) returns the path of the TDCOPY PRG (also used by make_testdisk.py and tdrive_mock.py); build_config(outdir) the other one.
 """
 import pathlib, subprocess, sys
 
@@ -28,10 +28,10 @@ def label(out, name, sym):
 
 def build(out, mock=False):
     """mock: the device registers where the VICE mock's KERNAL keeps its mailbox (RAM at $C800, Makefile) instead of $DE16"""
-    return _asm(out, "vdcopy", 0x1800, bss=0x2800, defs=["DEV0REG=$C806"] if mock else ())
+    return _asm(out, "tdcopy", 0x1800, bss=0x2800, defs=["DEV0REG=$C806"] if mock else ())
 
 def build_config(out):
-    return _asm(out, "vdconfig", 0x3000, "TDrive Config.prg", bss=0x2200)
+    return _asm(out, "tdconfig", 0x3000, "TDrive Config.prg", bss=0x2200)
 
 if __name__ == "__main__":
     out = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build" / "util"

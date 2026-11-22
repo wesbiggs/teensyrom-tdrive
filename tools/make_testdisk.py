@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build build/testdisk/vdtest.d64: VDSUITE (tests/basic/vdsuite.bas with the machine-code checks of tests/asm/suite.s), DMATEST,
-LOADTEST's data files, HELLO + BIG (for VDSUITE's checks by hand), VDCOPY and TDrive Config; and VDSUITE's card files.
+"""Build build/testdisk/tdtest.d64: TDSUITE (tests/basic/tdsuite.bas with the machine-code checks of tests/asm/suite.s), DMATEST,
+LOADTEST's data files, HELLO + BIG (for TDSUITE's checks by hand), TDCOPY and TDrive Config; and TDSUITE's card files.
 
 usage: make_testdisk.py [OUTDIR]     (needs petcat and c1541 from VICE)
-Copy the resulting vdtest.d64, vdbad.d64 and vdplain.prg to the root of the SD card (or USB stick) and mount vdtest.d64 with CD:VDTEST.D64.
+Copy the resulting tdtest.d64, tdbad.d64 and tdplain.prg to the root of the SD card (or USB stick) and mount tdtest.d64 with CD:TDTEST.D64.
 """
 import pathlib, random, subprocess, sys
 
@@ -33,23 +33,23 @@ def d_byte(a):
     return pat(a, 0xC3) & 0x0F                                         # colour RAM; stops before the CIAs at $DC00
 (out / "ldd000.prg").write_bytes(b"\xf0\xc7" + bytes(d_byte(a) for a in range(0xC7F0, 0xDC00)))
 
-bad = suite_files.bad_image(out / "vdbad.d64")                    # VDSUITE's card files (vdbad.d64, vdplain.prg)
-(out / "vdplain.prg").write_bytes(suite_files.plain_prg())
+bad = suite_files.bad_image(out / "tdbad.d64")                    # TDSUITE's card files (tdbad.d64, tdplain.prg)
+(out / "tdplain.prg").write_bytes(suite_files.plain_prg())
 
-img = out / "vdtest.d64"
+img = out / "tdtest.d64"
 if img.exists(): img.unlink()
 def c1541(*a): subprocess.run(["c1541", *a], check=True, capture_output=True)
-c1541("-format", "vdtest,01", "d64", str(img))
+c1541("-format", "tdtest,01", "d64", str(img))
 c1541("-attach", str(img), "-write", str(out / "hello.prg"), "hello")
 c1541("-attach", str(img), "-write", str(out / "big.prg"), "big")
 c1541("-attach", str(img), "-write", str(out / "lda000.prg"), "lda000")   # LOADTEST's data files
 c1541("-attach", str(img), "-write", str(out / "ldd000.prg"), "ldd000")
-c1541("-attach", str(img), "-write", str(suite_files.build_vdsuite(out, bad)), "vdsuite")
+c1541("-attach", str(img), "-write", str(suite_files.build_tdsuite(out, bad)), "tdsuite")
 from make_util import build as build_util, build_config
-c1541("-attach", str(img), "-write", str(build_util(out / "util")), "vdcopy")
-c1541("-attach", str(img), "-write", str(build_config(out / "util")), "vdconfig")
-# the one stand-alone machine-code test, a PRG with a BASIC SYS stub at $0801 (it writes $2000-$3FFF, where VDSUITE's BASIC is;
-# the other tests in tests/asm are VDSUITE's machine code, tests/asm/suite.s)
+c1541("-attach", str(img), "-write", str(build_util(out / "util")), "tdcopy")
+c1541("-attach", str(img), "-write", str(build_config(out / "util")), "tdconfig")
+# the one stand-alone machine-code test, a PRG with a BASIC SYS stub at $0801 (it writes $2000-$3FFF, where TDSUITE's BASIC is;
+# the other tests in tests/asm are TDSUITE's machine code, tests/asm/suite.s)
 for src in [root / "tests" / "asm" / "dmatest.s"]:
     obj, prg, cfg = out / (src.stem + ".o"), out / (src.stem + ".prg"), out / "asm.cfg"
     cfg.write_text("MEMORY { LA: start=$07FF, size=2; M: start=$0801, size=$3000, file=%O; }\n"
@@ -58,4 +58,4 @@ for src in [root / "tests" / "asm" / "dmatest.s"]:
     subprocess.run(["ld65", "-C", str(cfg), "-o", str(prg), str(obj)], check=True)
     c1541("-attach", str(img), "-write", str(prg), src.stem)
 print(subprocess.run(["c1541", "-attach", str(img), "-list"], capture_output=True, text=True, encoding="latin1").stdout.split("\n", 2)[2].rsplit("Unit", 1)[0])
-print(f"wrote {img}; for VDSUITE also copy {out / 'vdbad.d64'} and {out / 'vdplain.prg'} to the card root")
+print(f"wrote {img}; for TDSUITE also copy {out / 'tdbad.d64'} and {out / 'tdplain.prg'} to the card root")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TDrive Config.prg (util/vdconfig.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against a model of the drive.
+"""TDrive Config.prg (util/tdconfig.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against a model of the drive.
 
 The model follows d64/tdrive.c and firmware/IOH_TDrive.c: "!CONFIG[,W]" / "!STATE" host text files, "$path" listings by path (they do not change
 what is mounted), "CD:" with paths, the error channel, and the rule that closing channel 15 closes every channel of the unit. The real channel

@@ -20,16 +20,16 @@ It has two halves:
 The test suite runs primarily on VICE, with the TeensyROM+ mocked. Not all combinations of real-world devices have been tested. It works on my real C64 NTSC breadbin with a TR+, with or without a real 1541-][ drive. See the Status section of [CLAUDE.md](CLAUDE.md) for exactly what has and has not been checked on hardware. Testers are welcome!
 Please raise a GitHub issue if you find a non-working configuration.
 
-The `VDSUITE` test program passes on a real C64 on both the SD and the USB unit: `.d64` / `.d71` / `.d81` images made with `N:`, direct sector access,
+The `TDSUITE` test program passes on a real C64 on both the SD and the USB unit: `.d64` / `.d71` / `.d81` images made with `N:`, direct sector access,
 `C:` copy, REL files, append, `V` validate, `L:` / `W-` lock and write protect, bad sectors, plain files from the card, `MD:` / `RD:`, CMD paths and `S:` on images.
-Still **not run on a real C64**: the machine-code VDCOPY, the default device 8, TDrive+REU, `STATUS` compared with a real drive, RUN/STOP during a load,
+Still **not run on a real C64**: the machine-code TDCOPY, the default device 8, TDrive+REU, `STATUS` compared with a real drive, RUN/STOP during a load,
 and the `-DMA` firmware's LOAD (timed on a C128 in C64 mode only); its DMA `SAVE` and `VERIFY` have not run on any hardware yet.
-The test disk (`make testdisk`, see [Building and testing](#building-and-testing)) has `VDSUITE`, whose menu covers most of them.
+The test disk (`make testdisk`, see [Building and testing](#building-and-testing)) has `TDSUITE`, whose menu covers most of them.
 
 The original TR does not have the Kernal Replace functionality needed for this software. A more limited TR version, hooking the KERNAL's RAM vectors instead, is in the firmware since 0.9.0.58 but has only run in VICE; see [TR+ and TR compared](#tr-and-tr-compared) for what it keeps and loses.
 A C128 in 128 mode (BASIC 7.0) uses that same vector version, on the TR and the TR+, since 0.9.0.62: again VICE only so far, see [C128 in 128 mode](#c128-in-128-mode).
 A C128 in C64 mode works with 0.9.0.42: the firmware includes upstream's DMA HIRAM sense for Kernal Replace on a C128
-([TeensyROM PR 78](https://github.com/SensoriumEmbedded/TeensyROM/pull/78)), and `VDSUITE`'s "run all" passes on an NTSC C128 (its checks by hand are not done yet; a PAL C128 is untested).
+([TeensyROM PR 78](https://github.com/SensoriumEmbedded/TeensyROM/pull/78)), and `TDSUITE`'s "run all" passes on an NTSC C128 (its checks by hand are not done yet; a PAL C128 is untested).
 
 Tape (device 1) no longer works in any TDrive setup because its KERNAL code space was reused; for convenience, in its place `LOAD`, `SAVE` and `VERIFY` without a device number use device 8, as on the SX-64,
 and SHIFT+RUN/STOP types `LOAD"*",8,1` and `RUN` (the first file on the disk in device 8, loaded to its own address) instead of the tape's `LOAD` and `RUN`.
@@ -258,7 +258,7 @@ With the TR menu showing (no program running) the same commands show and change 
 | Feature | Notes |
 |---|---|
 | Writing plain files to the card (`SAVE` with nothing mounted) | Mount an image (or create one with `N:NAME.D64,ID`) |
-| Running programs with their own fastloaders | No `M-R`/`M-W`/`M-E`, so programs that upload code to the drive (or probe its ROM to detect the drive type) cannot run from the card. With a real 1541, `VDCOPY` `D` writes the `.d64` onto a floppy, and the program runs from there |
+| Running programs with their own fastloaders | No `M-R`/`M-W`/`M-E`, so programs that upload code to the drive (or probe its ROM to detect the drive type) cannot run from the card. With a real 1541, `TDCOPY` `D` writes the `.d64` onto a floppy, and the program runs from there |
 | `U3`-`U8` user jumps, `B-E` | Need drive code |
 | Copy protection that checks for bad sectors | Read errors from the image's error-info bytes are emulated (`U1`, `LOAD`, `GET#`); protections that time the drive, read raw GCR, or check the drive's memory (`M-R`) still fail. Writing a bad sector does not repair it |
 
@@ -277,7 +277,7 @@ hooks the KERNAL's RAM vectors (`$0314-$0333`) instead of patching the serial ro
 | `trvdrive` / `trls` while a program runs | Yes | Yes |
 | TDrive+SwiftLink, TDrive+REU, TDrive+Swift+REU | Yes | No: there are no combined handlers for the agent yet; SwiftLink and REU programs run with their own handler, without the drives |
 | Fast `LOAD` / `SAVE` / `VERIFY` | Yes | Yes |
-| Programs that call the serial routines directly (`LISTEN` `TALK` `SECOND` `TKSA` `ACPTR` `CIOUT` `UNTLK` `UNLSN`, `$FFB1` and friends: DOS wedges, some directory readers and disk utilities) | Yes | No: they talk to the real bus and do not see the virtual drives. VDCOPY and TDrive Config probe units this way and would have to probe another way (e.g. an `OPEN` of channel 15) |
+| Programs that call the serial routines directly (`LISTEN` `TALK` `SECOND` `TKSA` `ACPTR` `CIOUT` `UNTLK` `UNLSN`, `$FFB1` and friends: DOS wedges, some directory readers and disk utilities) | Yes | No: they talk to the real bus and do not see the virtual drives. TDCOPY and TDrive Config probe units this way and would have to probe another way (e.g. an `OPEN` of channel 15) |
 | Programs that call `RESTOR` (`$FF8A`) or install their own vectors (many games and demos at start-up) | Yes | No: the drives are gone until the vectors are set again. Multi-load games that use plain `$FFD5` with the default vectors are fine |
 | Code that calls stock routines directly (e.g. `$F333`) instead of the jump table | Yes | No: skips the hooks |
 | Programs that call the KERNAL with the character ROM banked in (`$01` = `$33` / `$32`; rare) | Yes | No: the handler is fetched from RAM instead of I/O, and the program crashes |
@@ -304,11 +304,11 @@ and the TR+, whichever TDrive Special IO is the default. **VICE only so far** (`
 
 ## Utilities
 
-### Copying files and whole disks between drives: `VDCOPY`
-`make util` builds `build/util/vdcopy.prg` (pure machine code behind a `SYS` stub, loads at `$0801`; it is also on `vdtest.d64`).
+### Copying files and whole disks between drives: `TDCOPY`
+`make util` builds `build/util/tdcopy.prg` (pure machine code behind a `SYS` stub, loads at `$0801`; it is also on `tdtest.d64`).
 It copies between any two units, in either direction: real drive to SD/USB, SD/USB to a real drive, or SD to USB. Put it on the card, load it from the SD drive and `RUN` it (with the real drive and its disk on the bus, if you use one):
 ```
-LOAD"VDCOPY",9 : RUN        (9 when a real drive is 8; the SD drive is 8 when there is none)
+LOAD"TDCOPY",9 : RUN        (9 when a real drive is 8; the SD drive is 8 when there is none)
 ```
 The screen takes the TeensyROM menu's colours (as TDrive Config does). A menu offers `F` (files), `D` (a whole disk) and `Q` (quit, back to BASIC with the old colours).
 Both ask for the source unit (default 8) and the destination unit (default: the SD drive, `PEEK(56854)`; type both numbers for any other combination, e.g. 8 and 9 for SD to USB) and check that both answer.
@@ -357,10 +357,10 @@ make build/kernal-tr.bin STOCK=/path/to/kernal-901227-03.bin
 ```
 
 ### Test disk for real hardware
-`make testdisk` builds `build/testdisk/vdtest.d64` (`VDSUITE`, the one test program, which `make test` also runs in VICE; `DMATEST`; `VDCOPY`; TDrive Config;
-and a few data files) and next to it `vdbad.d64` and `vdplain.prg`, which `VDSUITE` needs. Each release carries the three files too (built by
-`.github/workflows/artifacts.yml`). Copy all three to the root of the SD card (or USB stick), mount the disk with `OPEN15,8,15,"CD:VDTEST.D64":CLOSE15`,
-then `LOAD"VDSUITE",8` and `RUN`. It prints its results; please include them in an issue if a check fails. `tests/basic/README.md` says what each section checks.
+`make testdisk` builds `build/testdisk/tdtest.d64` (`TDSUITE`, the one test program, which `make test` also runs in VICE; `DMATEST`; `TDCOPY`; TDrive Config;
+and a few data files) and next to it `tdbad.d64` and `tdplain.prg`, which `TDSUITE` needs. Each release carries the three files too (built by
+`.github/workflows/artifacts.yml`). Copy all three to the root of the SD card (or USB stick), mount the disk with `OPEN15,8,15,"CD:TDTEST.D64":CLOSE15`,
+then `LOAD"TDSUITE",8` and `RUN`. It prints its results; please include them in an issue if a check fails. `tests/basic/README.md` says what each section checks.
 
 ## Further Documentation
 * [firmware/README.md](firmware/README.md): how the firmware glue and the KERNAL patches work.

@@ -8,7 +8,7 @@ out (`$01 = $34`, all RAM) now and then returns a wrong byte. Quest for the King
 freezes at start-up, shows wrong glyphs or ends in the NMI handler, differently on every run. With Special IO = None the same test is clean.
 
 ## Reproduction
-`tests/asm/vaulttest.s` in this repository (a 536-byte PRG, also on `build/testdisk/vdtest.d64` as `VAULTTEST`; needs no mailbox):
+`tests/asm/vaulttest.s` in this repository (a 536-byte PRG, also on `build/testdisk/tdtest.d64` as `VAULTTEST`; needs no mailbox):
 it switches to all-RAM, writes or reads pages of `$D000-$FEFF`, switches back, and counts wrong bytes per column (`$Dxxx`, `$Exxx`, `$Fxxx`).
 T1 one all-RAM session for the whole fill and verify; T2 one session per page; T3 one session per 64 bytes (like the game's row reads).
 

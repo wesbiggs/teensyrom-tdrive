@@ -437,7 +437,7 @@ class TDriveTests(unittest.TestCase):
         self.assertEqual(self.vd.status(), "00, OK,00,00\r")
 
     def test_unread_error_does_not_outlive_a_good_command(self):
-        # found by VDSUITE: a LOAD of a missing file (62, never read) and then a command that succeeds must say 00, as a 1541 does
+        # found by TDSUITE: a LOAD of a missing file (62, never read) and then a command that succeeds must say 00, as a 1541 does
         self.vd.open(8, 2, b"NOSUCH"); self.vd.close(8, 2)
         self.vd.listen(8, 0x6F, b"B-A:0,1,0")
         self.assertEqual(self.vd.status(), "00, OK,00,00\r")

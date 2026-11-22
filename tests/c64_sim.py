@@ -1,4 +1,4 @@
-"""A C64 machine-code program run in py65 with the KERNAL calls it makes answered in Python (a test aid, used by tests/test_vdconfig.py).
+"""A C64 machine-code program run in py65 with the KERNAL calls it makes answered in Python (a test aid, used by tests/test_tdconfig.py).
 
 The program is loaded from its PRG and started at the SYS address of its BASIC stub, as if BASIC had called it. A JSR to one of the KERNAL
 jump-table entries below is carried out here and returns like the real routine: SETLFS, SETNAM, OPEN, CLOSE, CHKIN, CHKOUT, CLRCHN,
@@ -16,7 +16,7 @@ TDrive agent: registers at $DF00, IDs at $DF09/$DF0A, IO1 $DE08-$DEFF the agent'
 $DE16/$DE17 and moved to the layout's registers. Under the agent the bus scan is modelled as d64/tdrive_vec.c and d64/tdrive_io.c do it:
 real = the numbers a real drive answers at; the units' numbers are provisional until VIO_SCAN / VIO_FREE (the program's own scan) or,
 failing that, the engine's own scan at the first OPEN; an OPEN that reaches a real drive is an error ("not modelled") unless
-real_open is True: then the drive object answers it (a test whose drive plays the real one too, tests/test_vdcopy.py).
+real_open is True: then the drive object answers it (a test whose drive plays the real one too, tests/test_tdcopy.py).
 Kept from the real KERNAL on purpose: CHRIN from a serial file answers CR without reading while ST ($90) is not 0, every read ORs its
 bits into ST, and bytes sent to a file reach the drive at UNLISTEN (CLRCHN / CLOSE), so a command is one PRINT#."""
 from py65.devices.mpu6502 import MPU

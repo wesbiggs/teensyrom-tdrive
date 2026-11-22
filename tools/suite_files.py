@@ -1,29 +1,29 @@
-"""VDSUITE (tests/basic/vdsuite.bas) and its card files: a plain PRG and a .d64 with an error table, plus the placeholders the suite needs.
+"""TDSUITE (tests/basic/tdsuite.bas) and its card files: a plain PRG and a .d64 with an error table, plus the placeholders the suite needs.
 
 Used by tools/make_testdisk.py (the test disk and the files to copy to the card root) and tools/tdrive_mock.py (the mock's card in VICE).
 """
 import pathlib, subprocess, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SUITE_TOP = 0x5800                      # the PRG's end: VDSUITE lowers the top of BASIC to $6000, its variables and strings live in between
+SUITE_TOP = 0x5800                      # the PRG's end: TDSUITE lowers the top of BASIC to $6000, its variables and strings live in between
 
 BAD_FREE = (30, 5)                      # a free sector the error table marks 21 (READ ERROR, byte 3); 30/4 stays good
 
 
 def plain_prg():
-    """VDPLAIN.PRG: load address $C000, then 600 bytes (j*7+3) & 255."""
+    """TDPLAIN.PRG: load address $C000, then 600 bytes (j*7+3) & 255."""
     return b"\x00\xc0" + bytes((j * 7 + 3) & 255 for j in range(600))
 
 
 def bad_image(path):
-    """VDBAD.D64: BADFILE (1000 bytes, load address $C000, data 1 + j % 250) whose second sector the error table marks 23
+    """TDBAD.D64: BADFILE (1000 bytes, load address $C000, data 1 + j % 250) whose second sector the error table marks 23
     (READ ERROR, byte 5), and the free sector BAD_FREE marked 21. Returns the bad file sector (track, sector)."""
     path = pathlib.Path(path)
     with tempfile.TemporaryDirectory() as tmp:
         prg = pathlib.Path(tmp) / "badfile.prg"
         prg.write_bytes(b"\x00\xc0" + bytes(1 + j % 250 for j in range(998)))
         if path.exists(): path.unlink()
-        subprocess.run(["c1541", "-format", "vdbad,bd", "d64", str(path)], check=True, capture_output=True)
+        subprocess.run(["c1541", "-format", "tdbad,bd", "d64", str(path)], check=True, capture_output=True)
         subprocess.run(["c1541", "-attach", str(path), "-write", str(prg), "badfile"], check=True, capture_output=True)
     img = bytearray(path.read_bytes())
     def off(t, s): return (sum(21 if x <= 17 else 19 if x <= 24 else 18 if x <= 30 else 17 for x in range(1, t)) + s) * 256
@@ -55,13 +55,13 @@ def strip_rems(text):
     return "\n".join(out) + "\n"
 
 
-def build_vdsuite(out, bad, mock=False):
-    """VDSUITE.PRG: the BASIC program (petcat) with the machine-code checks of tests/asm/suite.s appended at the next page,
+def build_tdsuite(out, bad, mock=False):
+    """TDSUITE.PRG: the BASIC program (petcat) with the machine-code checks of tests/asm/suite.s appended at the next page,
     linked for that address. mock: BUSTEST on the VICE mock's mailbox (RAM at $C800, window $CA00) instead of $DE10/$DF80.
     Returns the PRG's path in out."""
     out = pathlib.Path(out); out.mkdir(parents=True, exist_ok=True)
-    text, prg = out / "vdsuite.bas", out / "vdsuite.prg"
-    text.write_text(strip_rems(subst((ROOT / "tests" / "basic" / "vdsuite.bas").read_text(), bad)))
+    text, prg = out / "tdsuite.bas", out / "tdsuite.prg"
+    text.write_text(strip_rems(subst((ROOT / "tests" / "basic" / "tdsuite.bas").read_text(), bad)))
     subprocess.run(["petcat", "-w2", "-o", str(prg), "--", str(text)], check=True, capture_output=True)
     basic = prg.read_bytes()
     assert basic[:2] == b"\x01\x08", "petcat: load address"

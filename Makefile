@@ -2,7 +2,7 @@
 STOCK ?= /opt/homebrew/Cellar/vice/3.10/share/vice/C64/kernal-901227-03.bin
 
 # util/ is also a directory: without .PHONY `make util` is always "up to date"
-.PHONY: test test-agent test-d64 test-devcfg test-fw test-vdconfig test-vdcopy test-dmatest test-reset test-gate test-banner test-menuprobe test-variants test-hash shot testdisk util
+.PHONY: test test-agent test-d64 test-devcfg test-fw test-tdconfig test-tdcopy test-dmatest test-reset test-gate test-banner test-menuprobe test-variants test-hash shot testdisk util
 
 # Hardware image: mailbox at IO1 ($DE10, above the SwiftLink ACIA at $DE00-$DE07)
 build/kernal-tr.bin: $(wildcard patches/*.s) tools/build.py
@@ -59,11 +59,11 @@ test-devcfg:
 test-fw:
 	python3 -I tests/fw_host/run.py $(STOCK)   # with the stock ROM: the firmware's in-memory patch == kernal-tr.bin
 
-test-vdconfig:   # TDrive Config.prg (util/vdconfig.s) in py65 with its KERNAL calls answered by a drive model (skipped without py65)
-	python3 -I tests/test_vdconfig.py
+test-tdconfig:   # TDrive Config.prg (util/tdconfig.s) in py65 with its KERNAL calls answered by a drive model (skipped without py65)
+	python3 -I tests/test_tdconfig.py
 
-test-vdcopy: build/libd64.dylib   # VDCOPY (util/vdcopy.s) in py65 against the real drive code on both units: whole-disk and file copies (skipped without py65)
-	python3 -I tests/test_vdcopy.py
+test-tdcopy: build/libd64.dylib   # TDCOPY (util/tdcopy.s) in py65 against the real drive code on both units: whole-disk and file copies (skipped without py65)
+	python3 -I tests/test_tdcopy.py
 
 test-dmatest:   # DMATEST (tests/asm/dmatest.s, the TR+ DMA-write check) in py65, the host's writes played by the test (skipped without py65)
 	python3 -I tests/test_dmatest.py
@@ -83,7 +83,7 @@ test-menuprobe: build/libd64.dylib   # the TR menu's launch-time bus probe (firm
 test-variants: build/libd64.dylib   # the patch on each ROM the firmware patches in memory (VD_KnownKernals), in VICE; ROMs found next to STOCK
 	python3 -I tests/variants_vice.py $(STOCK)
 
-test: build/kernal-vd.bin build/kernal-vd-nodma.bin build/kernal-tr-nodma.bin build/libd64.dylib test-d64 test-devcfg test-fw test-reset test-gate test-banner test-vdconfig test-vdcopy test-dmatest test-hash test-menuprobe test-variants test-agent
+test: build/kernal-vd.bin build/kernal-vd-nodma.bin build/kernal-tr-nodma.bin build/libd64.dylib test-d64 test-devcfg test-fw test-reset test-gate test-banner test-tdconfig test-tdcopy test-dmatest test-hash test-menuprobe test-variants test-agent
 	python3 -I tools/tdrive_mock.py build/kernal-vd.bin
 	python3 -I tools/tdrive_mock.py build/kernal-vd-nodma.bin scan
 
@@ -100,10 +100,10 @@ build/banner-only/banner.s: bringup/banner.s
 build/kernal-banner.bin: build/banner-only/banner.s tools/build.py
 	python3 -I tools/build.py $(STOCK) $@ --patches build/banner-only
 
-# Test disk for the real hardware: copy build/testdisk/vdtest.d64 to the SD card, then OPEN15,8,15,"CD:VDTEST.D64"
+# Test disk for the real hardware: copy build/testdisk/tdtest.d64 to the SD card, then OPEN15,8,15,"CD:TDTEST.D64"
 testdisk:
 	python3 -I tools/make_testdisk.py
 
-# VDCOPY, the file and whole-disk copy utility (machine code) between any two units (real drive, SD, USB): build/util/vdcopy.prg (copy it to the card; see the README)
+# TDCOPY, the file and whole-disk copy utility (machine code) between any two units (real drive, SD, USB): build/util/tdcopy.prg (copy it to the card; see the README)
 util:
 	python3 -I tools/make_util.py

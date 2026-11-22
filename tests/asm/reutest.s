@@ -26,7 +26,7 @@ R_ACTRL  = REU + 10
 C_STASH  = $90              ; execute, no $FF00 wait, C64 -> REU
 C_FETCH  = $91              ; execute, no $FF00 wait, REU -> C64
 
-BUF      = $6000            ; 8 KB pattern (above VDSUITE, which lowers the top of BASIC to $6000)
+BUF      = $6000            ; 8 KB pattern (above TDSUITE, which lowers the top of BASIC to $6000)
 BACK     = $8000            ; 8 KB read back
 TAGBASE  = $50              ; bank b's tag is TAGBASE + b
 MAXBANK  = 8                ; 512 KB, the TeensyROM's limit
@@ -51,7 +51,7 @@ hk       = $02
 bad      = $03              ; this chunk had a wrong byte
 
 .segment "CODE"
-start:                          ; VDSUITE calls it by SYS through the jump table in tests/asm/suite.s
+start:                          ; TDSUITE calls it by SYS through the jump table in tests/asm/suite.s
         lda #0
         sta RBANKS
         sta RERR

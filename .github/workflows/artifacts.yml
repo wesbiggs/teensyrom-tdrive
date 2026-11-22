@@ -6,9 +6,9 @@
 #   tr-plus-dma  TeensyROM+_<ver>-DMA_full.hex   TR+ with DMA LOAD (Fab04_TDriveDMALoad; the version on the menu reads <ver>-DMA)
 # The plain TR hex has no TDrive yet (TDrive sits under Fab04_KernalReplace, TR+ only); it is built so the release carries both boards' files.
 # Test files (tools/make_testdisk.py, tests/basic/README.md), to copy to the root of the SD card or USB stick:
-#   vdtest.d64   VDSUITE, DMATEST, LOADTEST's data files, HELLO, BIG, VDCOPY, TDrive Config
-#   vdbad.d64    VDSUITE's bad-sector image (section 5)
-#   vdplain.prg  VDSUITE's plain card file (section 6)
+#   tdtest.d64   TDSUITE, DMATEST, LOADTEST's data files, HELLO, BIG, TDCOPY, TDrive Config
+#   tdbad.d64    TDSUITE's bad-sector image (section 5)
+#   tdplain.prg  TDSUITE's plain card file (section 6)
 # Runs only on demand: publishing a release, or a manual run (Actions tab, "Run workflow"), which builds them all and keeps them as
 # workflow artifacts without touching any release (run it before cutting a release to see that the patch still builds).
 name: build artifacts
@@ -82,7 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # c1541 and petcat (Ubuntu's vice package; no ROMs needed for these), ca65/ld65 for VDSUITE's machine code and the utilities
+      # c1541 and petcat (Ubuntu's vice package; no ROMs needed for these), ca65/ld65 for TDSUITE's machine code and the utilities
       - name: Install VICE tools and cc65
         run: sudo apt-get update -qq && sudo apt-get install -y -qq vice cc65
 
@@ -90,7 +90,7 @@ jobs:
         run: |
           python3 -I tools/make_testdisk.py build/testdisk
           mkdir -p build/testfiles
-          cp build/testdisk/vdtest.d64 build/testdisk/vdbad.d64 build/testdisk/vdplain.prg build/testfiles/
+          cp build/testdisk/tdtest.d64 build/testdisk/tdbad.d64 build/testdisk/tdplain.prg build/testfiles/
 
       - uses: actions/upload-artifact@v7
         with:
@@ -123,5 +123,5 @@ jobs:
         run: |
           ls -l hex testfiles
           [ "$(ls hex/*.hex | wc -l)" = 3 ] || { echo "::error::expected three hex files"; exit 1; }
-          for f in vdtest.d64 vdbad.d64 vdplain.prg; do [ -f "testfiles/$f" ] || { echo "::error::$f missing"; exit 1; }; done
-          gh release upload "$TAG" hex/*.hex testfiles/vdtest.d64 testfiles/vdbad.d64 testfiles/vdplain.prg --clobber --repo "$GITHUB_REPOSITORY"
+          for f in tdtest.d64 tdbad.d64 tdplain.prg; do [ -f "testfiles/$f" ] || { echo "::error::$f missing"; exit 1; }; done
+          gh release upload "$TAG" hex/*.hex testfiles/tdtest.d64 testfiles/tdbad.d64 testfiles/tdplain.prg --clobber --repo "$GITHUB_REPOSITORY"

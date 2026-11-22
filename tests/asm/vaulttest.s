@@ -16,7 +16,7 @@ ystart   = $F7
 yend     = $F8              ; 0 = 256
 
 .segment "CODE"
-start:                          ; VDSUITE calls it by SYS through the jump table in tests/asm/suite.s
+start:                          ; TDSUITE calls it by SYS through the jump table in tests/asm/suite.s
         lda #<hdr
         ldx #>hdr
         jsr puts

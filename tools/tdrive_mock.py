@@ -40,7 +40,7 @@ import suite_files
 OK = b"00, OK,00,00\r"
 
 def make_image(workdir, bad):
-    """Build a test disk with c1541: TEST (BASIC), BIG (multi-sector, load $2000), VDSUITE (bad = VDBAD.D64's bad file sector)."""
+    """Build a test disk with c1541: TEST (BASIC), BIG (multi-sector, load $2000), TDSUITE (bad = TDBAD.D64's bad file sector)."""
     rnd = random.Random(1)
     big = b"\x00\x20" + bytes(rnd.randrange(256) for _ in range(6000))
     prg = b"\x01\x08" + bytes.fromhex("0e08 0a00 99 22 48 49 22 00 00 00".replace(" ", ""))  # 10 PRINT"HI"
@@ -51,9 +51,9 @@ def make_image(workdir, bad):
     c("-format", "mockdisk,md", "d64", str(img))
     c("-attach", str(img), "-write", str(workdir / "test.prg"), "test")
     c("-attach", str(img), "-write", str(workdir / "big.prg"), "big")
-    c("-attach", str(img), "-write", str(suite_files.build_vdsuite(workdir / "suite", bad, mock=True)), "vdsuite")   # BUSTEST on the RAM mailbox
+    c("-attach", str(img), "-write", str(suite_files.build_tdsuite(workdir / "suite", bad, mock=True)), "tdsuite")   # BUSTEST on the RAM mailbox
     from make_util import build as build_util
-    c("-attach", str(img), "-write", str(build_util(workdir / "util", mock=True)), "vdcopy")
+    c("-attach", str(img), "-write", str(build_util(workdir / "util", mock=True)), "tdcopy")
     return img.read_bytes(), big
 
 
@@ -168,25 +168,25 @@ def main(kernal, scenario="basic", vecprg=None):
         (workdir / "geo.bin").write_bytes(gimg)
         geo = ["-georam", "-georamsize", "512", "-georamimage", str(workdir / "geo.bin"), "+georamimagerw"]
     machine = ["x128"] if c128 else ["x64sc", "-kernal", kernal]                    # x128: its own ROMs (VICE's C128 data folder)
-    reu = ["-reu", "-reusize", "512"] if scenario == "basic" else []   # VDSUITE's REUTEST (section 14)
+    reu = ["-reu", "-reusize", "512"] if scenario == "basic" else []   # TDSUITE's REUTEST (section 14)
     vice = subprocess.Popen([machine[0], "-config", str(workdir / "vicerc"), "-default", "-warp", *drives, *geo, *reu, *machine[1:],
                              "-binarymonitor", "-binarymonitoraddress", "ip4://127.0.0.1:%d" % MON_PORT],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         m = Mon()
         sdroot = workdir / "sdroot"; sdroot.mkdir()
-        bad = suite_files.bad_image(sdroot / "vdbad.d64")                # VDSUITE's card files
-        (sdroot / "vdplain.prg").write_bytes(suite_files.plain_prg())
+        bad = suite_files.bad_image(sdroot / "tdbad.d64")                # TDSUITE's card files
+        (sdroot / "tdplain.prg").write_bytes(suite_files.plain_prg())
         image, big = make_image(workdir, bad)
         if c128:       # a C128 boot sector on 1/0 (and taken in the BAM): "CBM", no extra sectors, the name, no file, code that marks $0C00
             image = bytearray(image)
-            image[0:256] = (b"CBM" + bytes(4) + b"VDBOOT\x00" + b"\x00" + bytes([0xA9, 0x5A, 0x8D, 0x00, 0x0C, 0x60])).ljust(256, b"\x00")
+            image[0:256] = (b"CBM" + bytes(4) + b"TDBOOT\x00" + b"\x00" + bytes([0xA9, 0x5A, 0x8D, 0x00, 0x0C, 0x60])).ljust(256, b"\x00")
             bam = 0x16500 + 4
             image[bam] -= 1; image[bam + 1] &= 0xFE
             image = bytes(image)
         disk = Disk(image)
         io = VIO()
-        # a fake SD card for CD:/mount/renumber tests (vdsuite.bas)
+        # a fake SD card for CD:/mount/renumber tests (tdsuite.bas)
         (sdroot / "mock.d64").write_bytes(image)
         for fmt, nm_, fn in (("d81", "bigdisk", "big.d81"), ("d71", "twodisk", "two.d71")):
             subprocess.run(["c1541", "-format", nm_ + ",xx", fmt, str(sdroot / fn)], check=True, capture_output=True)
@@ -401,8 +401,8 @@ def main(kernal, scenario="basic", vecprg=None):
             import re; probe = [(int(p), int(t)) for p, t in re.findall(r"P= (\d+) T= (\d+)", "".join(m.screen()))]
             check("scan: probing an empty number gives ST bit 7 (DEVICE NOT PRESENT): %s" % probe, bool(probe and probe[-1][0] & 0x80))
             check("scan: probing an empty number takes %s jiffies (< 4 = 66 ms)" % [t for _, t in probe], bool(probe and probe[-1][1] < 4))
-            # --- util/vdcopy: copy from the real 1541 (8) to the SD drive (9), then the other directions ---
-            def vdcopy(sel, replace, expect, src="", dst=""):
+            # --- util/tdcopy: copy from the real 1541 (8) to the SD drive (9), then the other directions ---
+            def tdcopy(sel, replace, expect, src="", dst=""):
                 m.keys('RUN\r'); service(1.5); m.keys('F'); service(0.5)                # the menu: F = files
                 m.keys(src + '\r'); service(0.5); m.keys(dst + '\r'); service(0.5)     # default units: 8 -> 9 (PEEK(56854) says the SD is 9)
                 for _ in range(40):                       # the directory is read from the true-drive 1541
@@ -414,53 +414,53 @@ def main(kernal, scenario="basic", vecprg=None):
                     service(1.0, limit=3)
                     if any("COPIED," in r for r in m.screen()): break
                 scr = m.screen()
-                check("vdcopy %r replace=%s: %s" % (sel, replace, expect), any(expect in " ".join(r.split()) for r in scr))
+                check("tdcopy %r replace=%s: %s" % (sel, replace, expect), any(expect in " ".join(r.split()) for r in scr))
                 if not ok: print("\n".join(scr))
                 m.keys('\r'); service(1.0); m.keys('Q'); service(1.0)      # RETURN at the prompt: the menu; Q quits
-            run('LOAD"VDCOPY",9\r', "READY.")
-            vdcopy("A", False, "2 COPIED, 1 SKIPPED, 0 FAILED")           # TEST exists on the SD
+            run('LOAD"TDCOPY",9\r', "READY.")
+            tdcopy("A", False, "2 COPIED, 1 SKIPPED, 0 FAILED")           # TEST exists on the SD
             img = workdir / "after.d64"; img.write_bytes(disk.dump())
             for nm_ in ("rprg", "rseq"):
                 f = workdir / (nm_ + ".out")
                 subprocess.run(["c1541", "-attach", str(img), "-read", nm_ + (",s" if nm_ == "rseq" else ""), str(f)], capture_output=True)
                 want = real[nm_]
                 got = f.read_bytes() if f.exists() else b""
-                check("vdcopy: %s copied byte for byte" % nm_, got == want)
+                check("tdcopy: %s copied byte for byte" % nm_, got == want)
                 if got != want:
                     print("  got %d bytes, want %d, first difference at %s" % (len(got), len(want), next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), None)))
-            vdcopy("3", True, "1 COPIED, 0 SKIPPED, 0 FAILED")            # replace the existing TEST
-            vdcopy("1,2-3", False, "0 COPIED, 3 SKIPPED, 0 FAILED")       # a list and a range, all exist now
+            tdcopy("3", True, "1 COPIED, 0 SKIPPED, 0 FAILED")            # replace the existing TEST
+            tdcopy("1,2-3", False, "0 COPIED, 3 SKIPPED, 0 FAILED")       # a list and a range, all exist now
             img.write_bytes(disk.dump())
             subprocess.run(["c1541", "-attach", str(img), "-read", "test", str(workdir / "test.out")], capture_output=True)
-            check("vdcopy: the replaced TEST is the real drive's", (workdir / "test.out").exists() and (workdir / "test.out").read_bytes() == real["test"])
+            check("tdcopy: the replaced TEST is the real drive's", (workdir / "test.out").exists() and (workdir / "test.out").read_bytes() == real["test"])
             def usb_file(name):
                 f = workdir / "usb.out"; f.unlink(missing_ok=True)
                 img_ = workdir / "usb_after.d64"; img_.write_bytes(usbd.dump())
                 subprocess.run(["c1541", "-attach", str(img_), "-read", name, str(f)], capture_output=True)
                 return f.read_bytes() if f.exists() else b""
-            # tdrive -> tdrive: SD (9) to USB (11); the SD listing is TEST BIG ... vdcopy RPRG RSEQ, so 1 = TEST and 2 = BIG
-            vdcopy("1", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "11")
-            check("vdcopy: SD -> USB, TEST byte for byte", usb_file("test") == real["test"])
-            vdcopy("2", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "11")
-            check("vdcopy: SD -> USB, BIG (6000 bytes) byte for byte", usb_file("big") == big)
-            vdcopy("1-2", False, "0 COPIED, 2 SKIPPED, 0 FAILED", "9", "11")
+            # tdrive -> tdrive: SD (9) to USB (11); the SD listing is TEST BIG ... tdcopy RPRG RSEQ, so 1 = TEST and 2 = BIG
+            tdcopy("1", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "11")
+            check("tdcopy: SD -> USB, TEST byte for byte", usb_file("test") == real["test"])
+            tdcopy("2", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "11")
+            check("tdcopy: SD -> USB, BIG (6000 bytes) byte for byte", usb_file("big") == big)
+            tdcopy("1-2", False, "0 COPIED, 2 SKIPPED, 0 FAILED", "9", "11")
             # tdrive -> real drive: SD (9) to the 1541 (8), BIG; the 1541 then lists RPRG RSEQ TEST BIG. Back to the SD with replace (8 -> 9)
             # proves the bytes the real drive stored, and 8 -> 11 puts RPRG on the USB image.
-            vdcopy("2", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "8")
-            vdcopy("2", False, "0 COPIED, 1 SKIPPED, 0 FAILED", "9", "8")        # the real drive answers 63
-            vdcopy("4", True, "1 COPIED, 0 SKIPPED, 0 FAILED", "8", "9")
+            tdcopy("2", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "9", "8")
+            tdcopy("2", False, "0 COPIED, 1 SKIPPED, 0 FAILED", "9", "8")        # the real drive answers 63
+            tdcopy("4", True, "1 COPIED, 0 SKIPPED, 0 FAILED", "8", "9")
             sd_img = workdir / "sd_after.d64"; sd_img.write_bytes(disk.dump())
             (workdir / "big.out").unlink(missing_ok=True)
             subprocess.run(["c1541", "-attach", str(sd_img), "-read", "big", str(workdir / "big.out")], capture_output=True)
-            check("vdcopy: BIG went SD -> 1541 -> SD byte for byte", (workdir / "big.out").exists() and (workdir / "big.out").read_bytes() == big)
-            vdcopy("1", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "8", "11")
-            check("vdcopy: 1541 -> USB, RPRG byte for byte", usb_file("rprg") == real["rprg"])
+            check("tdcopy: BIG went SD -> 1541 -> SD byte for byte", (workdir / "big.out").exists() and (workdir / "big.out").read_bytes() == big)
+            tdcopy("1", False, "1 COPIED, 0 SKIPPED, 0 FAILED", "8", "11")
+            check("tdcopy: 1541 -> USB, RPRG byte for byte", usb_file("rprg") == real["rprg"])
 
-            # --- util/vdcopy D: whole disks, sector by sector, through the true-drive 1541 at 8 ---
+            # --- util/tdcopy D: whole disks, sector by sector, through the true-drive 1541 at 8 ---
             # Every byte to or from a tdrive unit stops VICE for this mock, so a whole disk would take ~10 minutes here: the test patches
-            # VDCOPY to copy tracks 17-19 (both sides of a speed-zone change, and track 18 with the BAM); tests/test_vdcopy.py copies all 683.
+            # TDCOPY to copy tracks 17-19 (both sides of a speed-zone change, and track 18 with the BAM); tests/test_tdcopy.py copies all 683.
             from make_util import label
-            m.write(label(workdir / "util", "vdcopy", "tfirst"), [17, 19])
+            m.write(label(workdir / "util", "tdcopy", "tfirst"), [17, 19])
             span = slice(16 * 21 * 256, (17 * 21 + 2 * 19) * 256)
             def until(text, secs):
                 for _ in range(secs):
@@ -475,22 +475,22 @@ def main(kernal, scenario="basic", vecprg=None):
                     m.keys(k); service(0.5)
                 until("PRESS A KEY", 900)
                 scr = m.screen()
-                print("  vdcopy disk %s: %.0f s from RUN (59 sectors)" % (label_, time.time() - t0))
+                print("  tdcopy disk %s: %.0f s from RUN (59 sectors)" % (label_, time.time() - t0))
                 m.keys(' '); service(1.0); m.keys('Q'); service(1.0)
                 return scr
             # the SD's mounted image (the mock disk) onto the real floppy, formatted first with its name and ID
             want = disk.dump()
             scr = vdisk("SD -> 1541", [(" Q ", 'D'), ("COPY FROM UNIT", '9\r'), ("COPY TO UNIT", '8\r'), ("(RETURN = THE MOUNTED ONE)", '\r'),
                                        ("WILL BE OVERWRITTEN", 'F')])
-            check("vdcopy disk: SD image -> 1541 done without errors (row 1: %r)" % scr[1], "DONE, 0 READ ERRORS" in scr[1])
+            check("tdcopy disk: SD image -> 1541 done without errors (row 1: %r)" % scr[1], "DONE, 0 READ ERRORS" in scr[1])
             floppy = (workdir / "real8.d64").read_bytes()
-            check("vdcopy disk: tracks 17-19 of the 1541's disk are the SD image's", floppy[span] == want[span])
-            check("vdcopy disk: the 1541 formatted with the image's name and ID", floppy[(17 * 21) * 256 + 0x90: (17 * 21) * 256 + 0xA4] == want[(17 * 21) * 256 + 0x90: (17 * 21) * 256 + 0xA4])
+            check("tdcopy disk: tracks 17-19 of the 1541's disk are the SD image's", floppy[span] == want[span])
+            check("tdcopy disk: the 1541 formatted with the image's name and ID", floppy[(17 * 21) * 256 + 0x90: (17 * 21) * 256 + 0xA4] == want[(17 * 21) * 256 + 0x90: (17 * 21) * 256 + 0xA4])
             # and back: the floppy into a new image on the USB unit
             scr = vdisk("1541 -> new USB image", [(" Q ", 'D'), ("COPY FROM UNIT", '8\r'), ("COPY TO UNIT", '11\r'), ("(RETURN = WRITE OVER", 'FROMREAL\r')])
-            check("vdcopy disk: 1541 -> new USB image done without errors (row 1: %r)" % scr[1], "DONE, 0 READ ERRORS" in scr[1])
+            check("tdcopy disk: 1541 -> new USB image done without errors (row 1: %r)" % scr[1], "DONE, 0 READ ERRORS" in scr[1])
             made = hs["disks"].get(sdroot / "fromreal.d64")
-            check("vdcopy disk: FROMREAL.D64 made, tracks 17-19 are the floppy's", made is not None and made.dump()[span] == floppy[span])
+            check("tdcopy disk: FROMREAL.D64 made, tracks 17-19 are the floppy's", made is not None and made.dump()[span] == floppy[span])
             return 0 if ok else 1
 
         if scenario == "variant":
@@ -558,7 +558,7 @@ def main(kernal, scenario="basic", vecprg=None):
         run('CLOSE2\r')
         run('OPEN15,8,15,"S:NUMTST":CLOSE15\r')
 
-        # --- the shipped BASIC test program (VDSUITE), run for real inside VICE ---
+        # --- the shipped BASIC test program (TDSUITE), run for real inside VICE ---
         def on_screen(text):
             return any(" ".join(text.split()) in " ".join(r.split()) for r in m.screen())
         def prog(name, answers, expect, limit=600.0, dev=8):
@@ -675,27 +675,27 @@ def main(kernal, scenario="basic", vecprg=None):
         run('NEW\r')
         shift_run()
 
-        # --- VDSUITE: every section ("9" = run all) on the mock card (images made with N:, MD/RD, plain files, VDBAD.D64, CMD paths,
+        # --- TDSUITE: every section ("9" = run all) on the mock card (images made with N:, MD/RD, plain files, TDBAD.D64, CMD paths,
         #     the clean-up with S:/RD:) ---
         def quit_suite():
-            """RETURN to VDSUITE's menu, 0 = quit: SYS 64738 asks for the TR menu; then the Teensy's reset (no ID: the stock cold start)"""
+            """RETURN to TDSUITE's menu, 0 = quit: SYS 64738 asks for the TR menu; then the Teensy's reset (no ID: the stock cold start)"""
             n0 = len(log)
             m.keys('\r'); settle(); m.keys('0\r'); t_end = time.time() + 10
             while not menu["asked"] and time.time() < t_end: service(0.1, limit=0.5)   # waits for the reset after VIO_MENU: never idle
             service(0.2)
-            check("vdsuite: 0 asks for the TR menu (calls %r)" % [e[0] for e in log[n0:]], 16 in [e[0] for e in log[n0:]] and menu["asked"] == 1)
+            check("tdsuite: 0 asks for the TR menu (calls %r)" % [e[0] for e in log[n0:]], 16 in [e[0] for e in log[n0:]] and menu["asked"] == 1)
             m.write(MBX + 9, [0x10, 0x03]); jump_settle(0xFCE2)
-            check("vdsuite: then the reset, banner and READY.", banner in m.screen() and any("READY." in r for r in m.screen()))
+            check("tdsuite: then the reset, banner and READY.", banner in m.screen() and any("READY." in r for r in m.screen()))
             m.write(MBX + 9, [0xD6, 0x64]); menu["asked"] = 0
             run('OPEN15,8,15,"CD:/MOCK.D64":CLOSE15\r')                       # the suite ends at the card root
             run('PRINT CHR$(147)\r')                                            # no banner left for the later SYS64738 check
 
-        ok = prog("vdsuite", ["", "1", "", "6", "", "6"], ["CARD FILES: 20 PASSED, 0 FAILED"])  and ok   # 6 twice: T2/E.D64 left by the first
+        ok = prog("tdsuite", ["", "1", "", "6", "", "6"], ["CARD FILES: 20 PASSED, 0 FAILED"])  and ok   # 6 twice: T2/E.D64 left by the first
         quit_suite()
-        ok = prog("vdsuite", ["", "9"], ["TOTAL 191 PASSED, 0 FAILED"])  and ok
+        ok = prog("tdsuite", ["", "9"], ["TOTAL 191 PASSED, 0 FAILED"])  and ok
         quit_suite()
-        check("vdsuite: its clean-up left no VDSCRATCH folder", not (sdroot / "vdscratch").exists() and (sdroot / "vdplain.prg").exists())
-        # the machine-code checks appended to VDSUITE (BUSTEST on the RAM mailbox, VAULTTEST, REUTEST with VICE's 512 KB REU; LOADTEST
+        check("tdsuite: its clean-up left no TDSCRATCH folder", not (sdroot / "tdscratch").exists() and (sdroot / "tdplain.prg").exists())
+        # the machine-code checks appended to TDSUITE (BUSTEST on the RAM mailbox, VAULTTEST, REUTEST with VICE's 512 KB REU; LOADTEST
         # is not run: its LDD000 overwrites the mock's mailbox at $C800), the soak, the status probe and the renumbering
         def step(keys, text, limit, label, enter=True, loops=False):
             """keys (RETURN added unless enter is False), then wait up to limit s until it waits for input again (loops: until text
@@ -705,33 +705,33 @@ def main(kernal, scenario="basic", vecprg=None):
                 t_end = time.time() + limit
                 while time.time() < t_end and not on_screen(text): service(0.5, limit=2)
             else: settle(limit)
-            good = on_screen(text); check("vdsuite: " + label, good)
+            good = on_screen(text); check("tdsuite: " + label, good)
             if not good: print("\n".join(m.screen()))
-        ok = prog("vdsuite", [""], ["CHOICE"]) and ok
+        ok = prog("tdsuite", [""], ["CHOICE"]) and ok
         step("11", "BUS STRESS: 1 PASSED, 0 FAILED", 240, "11 bus stress (BUSTEST), no wrong read")
         step("", "CHOICE", 10, "back to the menu")
         step("13", "RAM UNDER ROM: 1 PASSED, 0 FAILED", 120, "13 RAM under ROM (VAULTTEST)")
         step("", "CHOICE", 10, "back to the menu")
         step("14", "REU: 2 PASSED, 0 FAILED", 240, "14 REUTEST")
-        check("vdsuite: ... it found 512 KB", on_screen("REU, 512 KB"))
+        check("tdsuite: ... it found 512 KB", on_screen("REU, 512 KB"))
         step("", "CHOICE", 10, "back to the menu")
         step("15", "PASS 3 ERRORS 0", 120, "15 soak, 3 loads without an error", loops=True)
         step(" ", "SOAK: 2 PASSED, 0 FAILED", 60, "any key ends the soak, clean", enter=False)
         step("", "CHOICE", 10, "back to the menu")
         step("16", "STATUS TEXT: 0 PASSED, 0 FAILED", 30, "16 status text")
-        check("vdsuite: ... the raw replies in brackets (nothing mounted: 74)", on_screen("[74,DRIVE NOT READY,00,00]"))
+        check("tdsuite: ... the raw replies in brackets (nothing mounted: 74)", on_screen("[74,DRIVE NOT READY,00,00]"))
         # renumber (U0> sent with PRINT#'s CR), the suite goes on with the new number; then back to 8
         step("", "CHOICE", 10, "back to the menu")
         step("17", "NEW DEVICE (8-30)", 10, "17 renumber asks for the number")
         step("10", "RENUMBER: 1 PASSED, 0 FAILED", 30, "device 10 answers after U0>")
-        check("vdsuite: ... NEW DEVICE 10 ANSWERS: 0 OK", on_screen("NEW DEVICE 10 ANSWERS: 0 OK"))
+        check("tdsuite: ... NEW DEVICE 10 ANSWERS: 0 OK", on_screen("NEW DEVICE 10 ANSWERS: 0 OK"))
         check("U0> reported the new number for persistence", hs["saved"] and hs["saved"][-1] == (10, 0))
         step("", "SUITE, DEVICE 10", 10, "the menu shows device 10")
         step("17", "NEW DEVICE (8-30)", 10, "17 renumber asks for the number")
         step("8", "NEW DEVICE 8 ANSWERS: 0 OK", 30, "device 8 answers again")
         check("... an explicit 8 is a fixed number now (saved as 8, not as 'automatic')", hs["saved"][-1] == (8, 0))
         quit_suite()
-        check("vdsuite: the soak's VDSCRATCH is left (the clean-up removes it)", (sdroot / "vdscratch" / "vs64.d64").exists())
+        check("tdsuite: the soak's TDSCRATCH is left (the clean-up removes it)", (sdroot / "tdscratch" / "vs64.d64").exists())
         run('OPEN15,8,15,"U0>"+CHR$(0):CLOSE15\r')                    # CHR$(0): back to automatic numbering
         check("U0>CHR$(0) saves 'automatic'", hs["saved"][-1] == (0, 0))
         run('LOAD"$",8\r', "SEARCHING FOR $")
@@ -911,8 +911,8 @@ def agent_tests(m, run, check, service, log, disk, big, workdir, vec, real):
     expect('NEW\r')
 
     if not real:
-        # VDSUITE on device 8: setup (CD, MD, N: of three images) and the D64 section (SEQ, DOS commands, B-/U1/U2, REL, C:, V)
-        prog("vdsuite", 8, ["", "1", "", "2"], ["D64 IMAGE: 44 PASSED, 0 FAILED"])   # (the menu cleared setup's line)
+        # TDSUITE on device 8: setup (CD, MD, N: of three images) and the D64 section (SEQ, DOS commands, B-/U1/U2, REL, C:, V)
+        prog("tdsuite", 8, ["", "1", "", "2"], ["D64 IMAGE: 44 PASSED, 0 FAILED"])   # (the menu cleared setup's line)
         service.jump(0xFE66)          # leave its INPUT: RUN/STOP+RESTORE (tested on its own below); NEW closes the files
         expect('NEW\r')
         expect('OPEN15,8,15,"CD:/MOCK.D64":CLOSE15\r')
@@ -1068,7 +1068,7 @@ def agent128_tests(m, run, check, service, log, disk, big, workdir, vec, real, m
     expect('FAST:DIRECTORY U%d:SLOW\r' % D, '0 "MOCKDISK')
     # --- BOOT: the KERNAL's boot call reads 1/0 through the drive and runs its code ---
     m.write(0x0C00, [0], ram0)
-    expect('BOOT U%d\r' % D, "BOOTING VDBOOT")
+    expect('BOOT U%d\r' % D, "BOOTING TDBOOT")
     chk("BOOT ran the boot sector's code ($0C00 = $5A)", m.read(0x0C00, 1, ram0) == b"\x5a")
     expect('NEW\r')
 
