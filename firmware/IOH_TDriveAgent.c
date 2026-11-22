@@ -1,6 +1,6 @@
 // "TDrive" Special IO for the plain TeensyROM (and "TDrive Agent" on the TR+): the virtual drive without Kernal Replace
-// (docs/DESIGN.md 52-53). The C64 keeps its own KERNAL; its RAM vectors point into a 246-byte 6502 agent (vector/vdagent.s,
-// vd_agent.h) that this handler serves from IO1, and the agent reports every call to the vector engine (d64/tdrive_vec.c),
+// (docs/DESIGN.md 52-53). The C64 keeps its own KERNAL; its RAM vectors point into a 246-byte 6502 agent (vector/tdagent.s,
+// td_agent.h) that this handler serves from IO1, and the agent reports every call to the vector engine (d64/tdrive_vec.c),
 // which does OPEN..SAVE and the file table on top of the drive the KERNAL build uses. The drive itself, the SD / USB glue,
 // PreStart, the remote control and the LED are IOH_TDrive.c's.
 //   IO1 $DE08-$DEFF -> the agent (it patches its own operands, so writes are kept: the page lives in RAM1)
@@ -14,7 +14,7 @@
 // Included from IOHandlers.h after IOH_TDrive.c (unity build, compiled as C++).
 
 #include "../tdrive/tdrive_vec.c"
-#include "../tdrive/vd_agent.h"     // VD_Agent[], VD_AgentBase: vector/vdagent.s for this layout (tools/build_agent.py)
+#include "../tdrive/td_agent.h"     // TD_Agent[], TD_AgentBase: vector/tdagent.s for this layout (tools/build_agent.py)
 
 void InitHndlr_TDriveAgent();
 void PollingHndlr_TDriveAgent();
@@ -61,56 +61,56 @@ FLASHMEM bool TDrive_AgentPreStart(uint8_t NextIOHndlr)
 // so its loader installs the agent; the loader leaves out the RUN for an empty program (C128Prg.ino, C128PrgBoot.asm).
 FLASHMEM bool TDrive_C128Launch()
 {
-   if (!VD_IsHandler(TDriveSwift_Remap(IO1[rwRegNextIOHndlr]))) return false;
+   if (!TD_IsHandler(TDriveSwift_Remap(IO1[rwRegNextIOHndlr]))) return false;
    IO1[rwRegNextIOHndlr] = IOH_TDriveAgent;
    TDrive_PreStart(true);
    Serial.println("TDrive: C128 mode, the agent");
    return true;
 }
 
-#define VD_AgentOfs (VD_AgentBase & 0xFF)
-static_assert((VD_AgentBase >> 8) == 0xDE && VD_AgentOfs + sizeof VD_Agent <= 256, "the agent lives in IO1");
+#define TD_AgentOfs (TD_AgentBase & 0xFF)
+static_assert((TD_AgentBase >> 8) == 0xDE && TD_AgentOfs + sizeof TD_Agent <= 256, "the agent lives in IO1");
 
-static uint8_t vdAgentPage[256];    // what IO1 answers: plain static = RAM1/DTCM, read on every agent fetch
+static uint8_t tdAgentPage[256];    // what IO1 answers: plain static = RAM1/DTCM, read on every agent fetch
 static vvec_t vvecStore;            // the engine's contexts (~1.2 KB), main loop only; never DMAMEM (RAM2 statics shrink the REU's heap, DESIGN.md 50)
 static vvec_t *vvec = NULL;
 
 FLASHMEM void InitHndlr_TDriveAgent()
 {
-   memset(vdAgentPage, 0, sizeof vdAgentPage);
-   memcpy(vdAgentPage + VD_AgentOfs, VD_Agent, sizeof VD_Agent);   // a fresh copy: the last run patched its operands
+   memset(tdAgentPage, 0, sizeof tdAgentPage);
+   memcpy(tdAgentPage + TD_AgentOfs, TD_Agent, sizeof TD_Agent);   // a fresh copy: the last run patched its operands
    if (vio == NULL) return;         // PreStart did not run (out of memory): nothing answers, the agent's vectors are never set
    vvec = &vvecStore;
-   vvec_init(vvec, vio, VD_AgentBase);
+   vvec_init(vvec, vio, TD_AgentBase);
 #ifdef Fab04_TDrive
-   VD_AltButtonInit();              // the Alt button switches disks under the agent too (TR+), as under the KERNAL handlers
+   TD_AltButtonInit();              // the Alt button switches disks under the agent too (TR+), as under the KERNAL handlers
 #endif
-   vdDrivePoll = &PollingHndlr_TDriveAgent;
+   tdDrivePoll = &PollingHndlr_TDriveAgent;
 }
 
 FLASHMEM void PollingHndlr_TDriveAgent()
 {
    if (vvec == NULL) return;
-   VD_PollCommon(vvec_poll(vvec) != 0);
+   TD_PollCommon(vvec_poll(vvec) != 0);
 }
 
 // The agent's bytes: every opcode the 6502 runs in here is one of these reads, so nothing may come before the answer.
 FASTRUN void IO1Hndlr_TDriveAgent(uint8_t Address, bool R_Wn)
 {
-   if (Address < VD_AgentOfs) return;                      // $DE00-$DE07: open bus
-   if (R_Wn) DataPortWriteWaitLog(vdAgentPage[Address]);
+   if (Address < TD_AgentOfs) return;                      // $DE00-$DE07: open bus
+   if (R_Wn) DataPortWriteWaitLog(tdAgentPage[Address]);
    else
    {
       uint8_t Data = DataPortWaitRead();
       TraceLogAddValidData(Data);
-      vdAgentPage[Address] = Data;                         // the agent's self-patched operands (POKE, PEEK, CALL)
+      tdAgentPage[Address] = Data;                         // the agent's self-patched operands (POKE, PEEK, CALL)
    }
 }
 
 FASTRUN void IO2Hndlr_TDriveAgent(uint8_t Address, bool R_Wn)
 {
    if (Address >= VIO_WIN_OFS) { IO2Hndlr_TDrive(Address, R_Wn); return; }   // the window, as in the KERNAL build
-   Address -= VD_AgentRegs;
+   Address -= TD_AgentRegs;
    if (!vioReady || Address >= VIO_NREGS) return;          // not mapped: open bus
    if (R_Wn) DataPortWriteWaitLog(reinterpret_cast<volatile uint8_t *>(&vioHot)[Address]);
    else

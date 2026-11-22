@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.0.75
+
+### Changed
+- **The KERNAL's banner tag is now `TDUNITS:` (was `VDUNITS:`).** The firmware finds the two drive-number bytes for the power-on banner
+  after this tag in the KERNAL it serves. A KERNAL built before this version (an old `sd:/TDrive/kernal.bin`, an EPROM, a MEGA65 core's
+  KERNAL file) does not carry the new tag: it shows the stock banner line and, when resident, is no longer recognized as this build's.
+  Rebuild `kernal-tr.bin` (the README's hash row is updated). Firmware builds; patch regenerated; host tests and VICE; **not on hardware**.
+
+### Build
+- The remaining `vd`/`VD` names are now `td`/`TD`: the firmware and library identifiers (`VD_*` → `TD_*`, `vd_*` → `td_*`, `vdXxx` →
+  `tdXxx`, `VDREU_Snoop` → `TDREU_Snoop`, the build knobs `TD_DEV0`/`TD_DEV1`/`TD_NSLOT`/`TD_TRACE`, `TD_DMA_LOAD=0` for the build without
+  DMA LOAD), the files `d64/td_cfg.h`, `patches/tdbanner.s`, `vector/tdagent.s` (and the generated `td_kpatch.h`, `td_agent.h`,
+  `build/tdagent*-vice.prg`, `build/kernal-td.bin`), and TDSUITE's machine-code tag (`"TD"`). `VD_COLD` keeps its name: the shared disk
+  image engine (TeensyROM's `Source/Teensy/DiskImage`) uses it.
+
 ## v0.9.0.74
 
 ### Fixed

@@ -19,8 +19,8 @@ static void (*g_on_millis)() = nullptr;               // test hook: a busy C64 i
 bool g_led = true;                                    // on, as the TR leaves it while a program runs
 uint32_t millis() { g_ms += g_tick; if (g_on_millis) g_on_millis(); return g_ms; }
 uint32_t micros() { return g_ms * 1000u; }
-volatile uint32_t g_vd_bc[8], g_vd_fault[11];
-uint32_t g_vd_srsr = 0;
+volatile uint32_t g_td_bc[8], g_td_fault[11];
+uint32_t g_td_srsr = 0;
 static int g_fs_probes = 0;
 bool SDFullInit() { g_fs_probes++; return fs_::exists(SD.root); }
 bool USBFileSystemWait() { g_fs_probes++; return fs_::exists(firstPartition.root); }
@@ -118,15 +118,15 @@ void IO2Hndlr_REU(uint8_t a, bool R_Wn)
 }
 bool KernalCheck(uint16_t a, bool r) { g_kc++; return g_kc_takes_kernal && r && a >= 0xE000; }   // takes $E000-$FFFF reads when asked
 bool (*KernalCheckArm())(uint16_t, bool) { HIRAM_State = HIRAM_State_Unknown; return &KernalCheck; }   // a C64
-#include "IO_Handlers/vdreu.c"      // = firmware/IOH_TDriveREU.c
+#include "IO_Handlers/tdreu.c"      // = firmware/IOH_TDriveREU.c
 #include "IO_Handlers/swiftreu.c"   // = firmware/IOH_TDriveSwiftREU.c
 #include "IO_Handlers/agent.c"      // = firmware/IOH_TDriveAgent.c ("TDrive Agent" on the TR+; tests/fw_host/plain.cpp drives it)
 
 static int fails = 0;
 static void check(const char *what, bool ok) { printf("%s %s\n", ok ? "PASS" : "FAIL", what); if (!ok) fails++; }
 
-static void w1(uint8_t reg, uint8_t v) { g_bus_in = v; IO1Hndlr_TDrive(VD_MboxBase + reg, false); }     // reg = mailbox offset
-static uint8_t r1(uint8_t reg) { IO1Hndlr_TDrive(VD_MboxBase + reg, true); return g_bus_out; }
+static void w1(uint8_t reg, uint8_t v) { g_bus_in = v; IO1Hndlr_TDrive(TD_MboxBase + reg, false); }     // reg = mailbox offset
+static uint8_t r1(uint8_t reg) { IO1Hndlr_TDrive(TD_MboxBase + reg, true); return g_bus_out; }
 static void ww(uint8_t off, uint8_t v) { g_bus_in = v; IO2Hndlr_TDrive(VIO_WIN_OFS + off, false); }     // off = window index
 static uint8_t wr_(uint8_t off) { IO2Hndlr_TDrive(VIO_WIN_OFS + off, true); return g_bus_out; }
 
@@ -176,7 +176,7 @@ static void prestart(bool probe = true)
     g_probes++;
     for (int dev = 8; IO1[rwRegScratch]; dev++) {
         if (dev <= 30 && g_real_drives.count(dev)) continue;
-        IO1[rwRegScratch] = dev <= 30 ? (uint8_t)dev : VD_ProbeEnd;
+        IO1[rwRegScratch] = dev <= 30 ? (uint8_t)dev : TD_ProbeEnd;
         kernal_prestart();
     }
 }
@@ -284,17 +284,17 @@ static int fast_save(int dev, const std::string &name, const std::string &data)
 
 static void cmd15(const std::string &text)       // OPEN-less: LISTEN 8, SECOND $6F, bytes, UNLSN
 {
-    call(VD_LISTEN, 8); call(VD_SECOND, 0x6F);
-    for (char c : text) call(VD_CIOUT, (uint8_t)c);
-    call(VD_UNLSN);
+    call(TD_LISTEN, 8); call(TD_SECOND, 0x6F);
+    for (char c : text) call(TD_CIOUT, (uint8_t)c);
+    call(TD_UNLSN);
 }
 
 static std::string status15()
 {
     std::string s; uint8_t st;
-    call(VD_TALK, 8); call(VD_TKSA, 0x6F);
-    for (;;) { int d = call(VD_ACPTR, 0, 0, &st) & 0xFF; s.push_back((char)d); if (st & 0x40) break; }
-    call(VD_UNTLK);
+    call(TD_TALK, 8); call(TD_TKSA, 0x6F);
+    for (;;) { int d = call(TD_ACPTR, 0, 0, &st) & 0xFF; s.push_back((char)d); if (st & 0x40) break; }
+    call(TD_UNTLK);
     return s;
 }
 
@@ -307,7 +307,7 @@ int main(int argc, char **argv)
     { FILE *f = fopen(argv[3], "rb"); char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) hello_expect.append(b, n); fclose(f); }
 
     memset(EEPROM.m, 0xFF, sizeof EEPROM.m);               // erased flash: no setting stored yet
-    memcpy(KernalBin + kBannerTag, "VDUNITS:", 8);          // patches/vdbanner.s: the tag, then the two unit bytes (0 as built)
+    memcpy(KernalBin + kBannerTag, "TDUNITS:", 8);          // patches/tdbanner.s: the tag, then the two unit bytes (0 as built)
     prestart();
     check("banner bytes: the menu probe settled both (8, 9)", banner(0) == 8 && banner(1) == 9);
     check("banner registers ($DE3C-$DE3F under the menu's handler): tag, then the settled 8 / 9",
@@ -323,16 +323,16 @@ int main(int argc, char **argv)
     check("banner registers: and the probe's numbers when it ends", IO1[62] == 8 && IO1[63] == 9);
     g_fs_probes = fs_probes0;                               // (the extra PreStart is not counted by the checks below)
     {
-        uint8_t img[64]; memset(img, 0x55, sizeof img); memcpy(img + 20, "VDUNITS:", 8); img[28] = img[29] = 0;
-        vio->vd.unit[1].present = 0; VD_BannerUnits(img, sizeof img, false); vio->vd.unit[1].present = 1;
+        uint8_t img[64]; memset(img, 0x55, sizeof img); memcpy(img + 20, "TDUNITS:", 8); img[28] = img[29] = 0;
+        vio->vd.unit[1].present = 0; TD_BannerUnits(img, sizeof img, false); vio->vd.unit[1].present = 1;
         check("banner bytes: an absent unit is $FE", img[28] == 0xFF && img[29] == 0xFE && img[27] == ':' && img[30] == 0x55);
-        uint8_t old[64]; memset(old, 0x55, sizeof old); memcpy(old + 20, "VDUNITS", 7);   // no tag (an older image): untouched
-        uint8_t ref[64]; memcpy(ref, old, sizeof ref); VD_BannerUnits(old, sizeof old, false);
+        uint8_t old[64]; memset(old, 0x55, sizeof old); memcpy(old + 20, "TDUNITS", 7);   // no tag (an older image): untouched
+        uint8_t ref[64]; memcpy(ref, old, sizeof ref); TD_BannerUnits(old, sizeof old, false);
         check("banner bytes: an image without the tag is left alone", memcmp(old, ref, sizeof ref) == 0);
-        memset(img, 0, sizeof img); memcpy(img + 55, "VDUNITS:", 8); VD_BannerUnits(img, sizeof img, false);   // tag at the very end: no room
+        memset(img, 0, sizeof img); memcpy(img + 55, "TDUNITS:", 8); TD_BannerUnits(img, sizeof img, false);   // tag at the very end: no room
         check("banner bytes: a tag with no room for the two bytes is ignored", img[62] == ':' && img[63] == 0);
-        vio->vd.unit[0].present = vio->vd.unit[1].present = 0; memset(img, 0, sizeof img); memcpy(img, "VDUNITS:", 8);
-        VD_BannerUnits(img, sizeof img, false); vio->vd.unit[0].present = vio->vd.unit[1].present = 1;
+        vio->vd.unit[0].present = vio->vd.unit[1].present = 0; memset(img, 0, sizeof img); memcpy(img, "TDUNITS:", 8);
+        TD_BannerUnits(img, sizeof img, false); vio->vd.unit[0].present = vio->vd.unit[1].present = 1;
         check("banner bytes: neither unit present ($FE $FE: NOSD NOUSB)", img[8] == 0xFE && img[9] == 0xFE);
     }
     check("pre-start probed SD and USB", g_fs_probes == 2);
@@ -348,7 +348,7 @@ int main(int argc, char **argv)
 
     // the mailbox lives at $DE10; the ACIA range below it is not ours
     g_bus_out = 0x77; IO1Hndlr_TDrive(0x00, true); IO1Hndlr_TDrive(0x03, true); IO1Hndlr_TDrive(0x07, true); IO1Hndlr_TDrive(0x08, true);
-    IO1Hndlr_TDrive(VD_MboxBase + 11, true);
+    IO1Hndlr_TDrive(TD_MboxBase + 11, true);
     check("mailbox is not mapped at $DE00-$DE07 or past $DE1A", g_bus_out == 0x77);
     g_bus_in = 0x42; IO1Hndlr_TDrive(0x00, false);
     check("a write to $DE00 does not touch the mailbox", vioHot.arg != 0x42 && !vioHot.pending);
@@ -357,7 +357,7 @@ int main(int argc, char **argv)
     check("combined entry named and fully wired", strcmp(IOHndlr_TDriveSwift.Name, "TDrive+SwiftLink") == 0 && strlen(IOHndlr_TDriveSwift.Name) < IOHNameLength
           && IOHndlr_TDriveSwift.IO2Hndlr == IO2Hndlr_TDrive && IOHndlr_TDriveSwift.CycleHndlr == CycleHndlr_SwiftLink);
     for (int a : {0x00, 0x01, 0x02, 0x03, 0x07, 0x0F}) { g_sw_last = 0xEE; IOHndlr_TDriveSwift.IO1Hndlr(a, true); check("ACIA offset goes to SwiftLink", g_sw_last == a); }
-    g_sw_io1 = 0; g_bus_in = 0x31; IOHndlr_TDriveSwift.IO1Hndlr(VD_MboxBase + VIO_ARG, false);
+    g_sw_io1 = 0; g_bus_in = 0x31; IOHndlr_TDriveSwift.IO1Hndlr(TD_MboxBase + VIO_ARG, false);
     check("mailbox offset goes to TDrive, not SwiftLink", g_sw_io1 == 0 && vioHot.arg == 0x31);
     IOHndlr_TDriveSwift.InitHndlr(); IOHndlr_TDriveSwift.PollingHndlr();
     check("init and polling run both handlers", g_sw_init == 1 && g_sw_poll == 1);
@@ -379,8 +379,8 @@ int main(int argc, char **argv)
     check("remap: default TDrive Agent -> TDrive Config runs with it, REU / SwiftLink programs keep theirs (no combined agent handlers)",
           TDriveSwift_Remap(IOH_TDrive) == IOH_TDriveAgent && TDriveSwift_Remap(IOH_REU) == IOH_REU
           && TDriveSwift_Remap(IOH_Swiftlink) == IOH_Swiftlink);
-    check("the agent is a TDrive handler but serves no KERNAL", VD_IsHandler(IOH_TDriveAgent) && !VD_IsKernalHandler(IOH_TDriveAgent)
-          && VD_IsKernalHandler(IOH_TDriveREU));
+    check("the agent is a TDrive handler but serves no KERNAL", TD_IsHandler(IOH_TDriveAgent) && !TD_IsKernalHandler(IOH_TDriveAgent)
+          && TD_IsKernalHandler(IOH_TDriveREU));
     check("TDrive Agent named and wired on the TR+", strcmp(IOHndlr_TDriveAgent.Name, "TDrive Agent") == 0
           && IOHndlr_TDriveAgent.IO1Hndlr == IO1Hndlr_TDriveAgent && IOHndlr_TDriveAgent.IO2Hndlr == IO2Hndlr_TDriveAgent);
     EEPROM.write(eepAdNextIOHndlr, IOH_None);
@@ -392,7 +392,7 @@ int main(int argc, char **argv)
           && IOHndlr_TDriveREU.CycleHndlr == nullptr && IOHndlr_TDriveSwiftREU.IO2Hndlr == IO2Hndlr_TDriveREU);
     {
         g_sw_io1 = 0; g_bus_out = 0x77; IOHndlr_TDriveREU.IO1Hndlr(0x02, true);
-        g_bus_in = 0x32; IOHndlr_TDriveREU.IO1Hndlr(VD_MboxBase + VIO_ARG, false);
+        g_bus_in = 0x32; IOHndlr_TDriveREU.IO1Hndlr(TD_MboxBase + VIO_ARG, false);
         check("TDrive+REU: $DE00-$DE0F unanswered, the mailbox at $DE10", g_sw_io1 == 0 && g_bus_out == 0x77 && vioHot.arg == 0x32);
         g_order.clear(); g_sw_init = 0; g_sw_poll = 0; fSpecialBtnChange = nullptr;
         IO1[rwRegPwrUpDefaults2] = rpud2AltBtnAutoLaunch;
@@ -406,7 +406,7 @@ int main(int argc, char **argv)
         check("TDrive+REU polls the REU and the drive, not SwiftLink", g_order == "r" && g_sw_poll == 0);
         fBusSnoop = &KernalCheck; g_reu_xfer = 0;
         g_bus_in = 0x80; IOHndlr_TDriveREU.IO2Hndlr(0x01, false);
-        check("TDrive+REU: $FF00-armed REU command keeps KernalCheck behind our snoop", fBusSnoop == &VDREU_Snoop);
+        check("TDrive+REU: $FF00-armed REU command keeps KernalCheck behind our snoop", fBusSnoop == &TDREU_Snoop);
         check("TDrive+REU: the $FF00 write starts the transfer, KernalCheck back", fBusSnoop(0xff00, false) && g_reu_xfer == 1 && fBusSnoop == &KernalCheck);
         fBusSnoop = nullptr;
     }
@@ -451,13 +451,13 @@ int main(int argc, char **argv)
         cmd(0x90);
         check("immediate REU command: transfer, KernalCheck back", g_reu_xfer == 1 && fBusSnoop == &KernalCheck);
         cmd(0x80);
-        check("$FF00-armed REU command: our snoop, not the REU's", fBusSnoop == &VDREU_Snoop);
+        check("$FF00-armed REU command: our snoop, not the REU's", fBusSnoop == &TDREU_Snoop);
         g_kc = 0;
         check("armed: other cycles still go to KernalCheck", !fBusSnoop(0xE000, true) && !fBusSnoop(0xff00, true) && g_kc == 2 && g_reu_xfer == 1);
         check("armed: the $FF00 write starts the transfer", fBusSnoop(0xff00, false) && g_reu_xfer == 2);
         check("after the trigger KernalCheck is back", fBusSnoop == &KernalCheck);
         cmd(0x80); cmd(0x80);
-        check("armed twice: still our snoop", fBusSnoop == &VDREU_Snoop);
+        check("armed twice: still our snoop", fBusSnoop == &TDREU_Snoop);
         cmd(0x90);
         check("armed, then an immediate command: KernalCheck back", fBusSnoop == &KernalCheck && g_reu_xfer == 3);
         cmd(0x80); fBusSnoop(0xff00, false);
@@ -468,9 +468,9 @@ int main(int argc, char **argv)
     check("remap: default TDrive+Swift+REU -> SwiftLink programs get it, REU programs the full REU of TDrive+REU",
           TDriveSwift_Remap(IOH_Swiftlink) == IOH_TDriveSwiftREU && TDriveSwift_Remap(IOH_REU) == IOH_TDriveREU);
     check("remap: default TDrive+Swift+REU, others pass through", TDriveSwift_Remap(IOH_Other) == IOH_Other && TDriveSwift_Remap(IOH_None) == IOH_None);
-    check("VD_IsHandler covers the four TDrive Special IOs", VD_IsHandler(IOH_TDrive) && VD_IsHandler(IOH_TDriveSwift) && VD_IsHandler(IOH_TDriveSwiftREU)
-          && VD_IsHandler(IOH_TDriveREU)
-          && !VD_IsHandler(IOH_REU) && !VD_IsHandler(IOH_Swiftlink));
+    check("TD_IsHandler covers the four TDrive Special IOs", TD_IsHandler(IOH_TDrive) && TD_IsHandler(IOH_TDriveSwift) && TD_IsHandler(IOH_TDriveSwiftREU)
+          && TD_IsHandler(IOH_TDriveREU)
+          && !TD_IsHandler(IOH_REU) && !TD_IsHandler(IOH_Swiftlink));
     EEPROM.write(eepAdNextIOHndlr, 0xFF);
     memset(EEPROM.m + eepAdTDriveDevs, 0xFF, 2);
 
@@ -484,7 +484,7 @@ int main(int argc, char **argv)
     // ---- aliases for host names the C64 can't use as they are (docs/DESIGN.md 44) ----
     check("alias of a long folder name", d.find("\"LONG FOLDER^NAME\"") != std::string::npos);
     cmd15("CD:LONG FOLDER^NAME");
-    check("CD: by the folder's alias", status15() == "00, OK,00,00\r" && std::string(vdUnit[0].cwd) == "/Long Folder With A Long Name");
+    check("CD: by the folder's alias", status15() == "00, OK,00,00\r" && std::string(tdUnit[0].cwd) == "/Long Folder With A Long Name");
     d = fast_load(8, "$");
     auto count = [](const std::string &s, const std::string &w) { int n = 0; for (size_t p = s.find(w); p != std::string::npos; p = s.find(w, p + 1)) n++; return n; };
     check("listing shows both sides by alias", d.find("\"THE-PU^SIDE1.D64\"") != std::string::npos && d.find("\"THE-PU^SIDE2.D64\"") != std::string::npos);
@@ -499,14 +499,14 @@ int main(int argc, char **argv)
     cmd15("S:DELETE-ME-^X.D64"); check("S: deletes an image file by its alias", status15().rfind("01,", 0) == 0
           && !fs_::exists(SD.root / "Long Folder With A Long Name" / "Delete-Me-Long-Image-Name-x.d64"));
     cmd15("CD:THE-PU^SIDE1.D64");
-    check("CD: mounts an image by its alias", status15() == "00, OK,00,00\r" && vdUnit[0].mounted
-          && std::string(vdUnit[0].imgName) == "The-Pumpkins-Breadbin-of-Horror-side1.D64");
+    check("CD: mounts an image by its alias", status15() == "00, OK,00,00\r" && tdUnit[0].mounted
+          && std::string(tdUnit[0].imgName) == "The-Pumpkins-Breadbin-of-Horror-side1.D64");
     check("... its listing", fast_load(8, "$").find("PUMPKINS1") != std::string::npos);
     { std::ifstream f(SD.root / ".tdrive"); std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
       check("... the sidecar holds the host path", s == "/Long Folder With A Long Name/The-Pumpkins-Breadbin-of-Horror-side1.D64"); }
     d = fast_load(8, "$/LONG FOLDER^NAME/THE-PU^SIDE2.D64");
     check("listing by an alias path", d.find("PUMPKINS2") != std::string::npos && d.find("\"SIDE2\"") != std::string::npos);
-    check("... and the selection is back (side 1, by its host name)", vdUnit[0].mounted && std::string(vdUnit[0].imgName) == "The-Pumpkins-Breadbin-of-Horror-side1.D64"
+    check("... and the selection is back (side 1, by its host name)", tdUnit[0].mounted && std::string(tdUnit[0].imgName) == "The-Pumpkins-Breadbin-of-Horror-side1.D64"
           && fast_load(8, "$").find("PUMPKINS1") != std::string::npos);
     check("LOAD through an alias path", fast_load(8, "/LONG FOLDER^NAME/THE-PU^SIDE2.D64/SIDE2", &rc) == std::string("\x01\x08") + "side two" && rc == 0);
     cmd15("CD:/"); status15();
@@ -620,20 +620,20 @@ int main(int argc, char **argv)
         cmd15("S:DMAFILE"); status15();
     }
     g_ms += 1000; PollingHndlr_TDrive();                       // > IMAGE_WRITEBACK_IDLE_MS since last write
-    check("dirty flag flushed", !vdUnit[0].wb.Dirty);
+    check("dirty flag flushed", !tdUnit[0].wb.Dirty);
     {   // a sync the card fails stays dirty and is tried again after the next idle period (DiskImage/WriteBack.h)
         std::string pay(300, 'w'); int r2;
-        check("write-back: a save to retry", fast_save(8, "WBFILE", pay) == 0 && vdUnit[0].wb.Dirty);
+        check("write-back: a save to retry", fast_save(8, "WBFILE", pay) == 0 && tdUnit[0].wb.Dirty);
         g_sync_fail = true;
         g_ms += 100; PollingHndlr_TDrive();
-        check("write-back: nothing synced before the idle period", vdUnit[0].wb.Dirty && !vdUnit[0].wb.FailureReported);
+        check("write-back: nothing synced before the idle period", tdUnit[0].wb.Dirty && !tdUnit[0].wb.FailureReported);
         g_ms += 1000; PollingHndlr_TDrive();
-        check("write-back: a failed sync stays dirty and is reported once", vdUnit[0].wb.Dirty && vdUnit[0].wb.FailureReported);
+        check("write-back: a failed sync stays dirty and is reported once", tdUnit[0].wb.Dirty && tdUnit[0].wb.FailureReported);
         g_ms += 1000; PollingHndlr_TDrive();
-        check("write-back: ... and tried again", vdUnit[0].wb.Dirty && vdUnit[0].wb.FailureReported);
+        check("write-back: ... and tried again", tdUnit[0].wb.Dirty && tdUnit[0].wb.FailureReported);
         g_sync_fail = false;
         g_ms += 1000; PollingHndlr_TDrive();
-        check("write-back: the card back: synced, the failure cleared", !vdUnit[0].wb.Dirty && !vdUnit[0].wb.FailureReported);
+        check("write-back: the card back: synced, the failure cleared", !tdUnit[0].wb.Dirty && !tdUnit[0].wb.FailureReported);
         check("write-back: the file reads back", fast_load(8, "WBFILE", &r2).substr(2) == pay && r2 == 0);
         cmd15("S:WBFILE"); status15();
         g_ms += 1000; PollingHndlr_TDrive();
@@ -647,7 +647,7 @@ int main(int argc, char **argv)
     d = fast_load(8, "$");
     check("listing of SUB", d.find("\"SD:/SUB ") != std::string::npos && d.find("\"INNER.D64\"") != std::string::npos);
     cmd15("CD:INNER.D64"); check("mount from subdirectory", status15() == "00, OK,00,00\r");
-    cmd15("CD:/"); check("CD:/ unmounts and returns to the root", status15() == "00, OK,00,00\r" && !vdUnit[0].mounted && vdUnit[0].cwd[0] == 0);
+    cmd15("CD:/"); check("CD:/ unmounts and returns to the root", status15() == "00, OK,00,00\r" && !tdUnit[0].mounted && tdUnit[0].cwd[0] == 0);
     cmd15("CD:SUB"); cmd15("CD:INNER.D64"); status15();
     cmd15("CD:_"); cmd15("CD:.."); d = fast_load(8, "$");
     check("CD:.. returns to root", d.find("\"GAME.D64\"") != std::string::npos);
@@ -658,27 +658,27 @@ int main(int argc, char **argv)
     check("... and it is left untouched", fs_::file_size(SD.root / "TINY.D64") == 12);
 
     // USB unit (device 9) is independent
-    int nm = call(VD_LISTEN, 9); call(VD_UNLSN);
+    int nm = call(TD_LISTEN, 9); call(TD_UNLSN);
     check("device 9 present", !(nm & 0x100));
     put_name("$"); int r9 = call(VIO_FLOAD_OPEN, 9, 1);
     check("device 9 lists the USB root", r9 == 0 && wr_(0) == 0x01 && wr_(1) == 0x04);
     while (!(call(VIO_FLOAD_BLK) , r1(VIO_ST) & 0x40)) {}
-    call(VD_LISTEN, 9); call(VD_SECOND, 0x6F);
-    for (char c : std::string("CD:USB.D64")) call(VD_CIOUT, (uint8_t)c);
-    call(VD_UNLSN);
+    call(TD_LISTEN, 9); call(TD_SECOND, 0x6F);
+    for (char c : std::string("CD:USB.D64")) call(TD_CIOUT, (uint8_t)c);
+    call(TD_UNLSN);
     d = fast_load(9, "$");
-    check("device 9 mounted its own image", d.find("USBDISK") != std::string::npos && vdUnit[1].mounted && !vdUnit[0].mounted);
+    check("device 9 mounted its own image", d.find("USBDISK") != std::string::npos && tdUnit[1].mounted && !tdUnit[0].mounted);
 
     // foreign device is not ours
-    nm = call(VD_LISTEN, 4);
+    nm = call(TD_LISTEN, 4);
     check("device 4 -> not mine", (nm & 0x100) != 0);
 
     // ---- device numbers persisted in EEPROM, changeable from BASIC (U0>+CHR$(n)) ----
     cmd15(std::string("U0>") + char(10));                   // OPEN15,8,15,"U0>"+CHR$(10)
     check("U0> wrote unit 0 to EEPROM (10), unit 1 default (0)", EEPROM.m[eepAdTDriveDevs] == 10 && EEPROM.m[eepAdTDriveDevs + 1] == 0);
-    nm = call(VD_LISTEN, 8);                                // 8 is now a real-bus device
+    nm = call(TD_LISTEN, 8);                                // 8 is now a real-bus device
     check("device 8 -> not mine after renumbering", (nm & 0x100) != 0);
-    nm = call(VD_LISTEN, 10); call(VD_UNLSN);
+    nm = call(TD_LISTEN, 10); call(TD_UNLSN);
     check("device 10 is the SD unit", !(nm & 0x100));
     prestart();                                     // 'power cycle'
     check("numbers survive a restart (10; USB automatic, the probe gives it 8)", vio->vd.dev[0] == 10 && vio->vd.dev[1] == 8);
@@ -694,16 +694,16 @@ int main(int argc, char **argv)
     fs_::remove(SD.root / ".tdrive"); fs_::remove(firstPartition.root / ".tdrive");     // forget everything remembered so far
     IO1[rWRegCurrMenuWAIT] = rmtSD; strcpy(DriveDirPath, "/SUB/INNER.D64*");
     prestart();
-    check("menu image on SD auto-mounted on unit 0 in its folder", vdUnit[0].mounted && !vdUnit[1].mounted && strcmp(vdUnit[0].cwd, "/SUB") == 0 && vio->vd.unit[0].disk);
+    check("menu image on SD auto-mounted on unit 0 in its folder", tdUnit[0].mounted && !tdUnit[1].mounted && strcmp(tdUnit[0].cwd, "/SUB") == 0 && vio->vd.unit[0].disk);
     check("auto-mounted image is listed", fast_load(8, "$").find("\"") != std::string::npos);
-    cmd15("CD:/"); check("CD:/ then unmounts it", status15() == "00, OK,00,00\r" && !vdUnit[0].mounted && vdUnit[0].cwd[0] == 0);
+    cmd15("CD:/"); check("CD:/ then unmounts it", status15() == "00, OK,00,00\r" && !tdUnit[0].mounted && tdUnit[0].cwd[0] == 0);
     IO1[rWRegCurrMenuWAIT] = rmtUSBDrive; strcpy(DriveDirPath, "/USB.D64*");
     prestart();
-    check("menu image on USB auto-mounted on unit 1", vdUnit[1].mounted && !vdUnit[0].mounted && fast_load(9, "$").find("USBDISK") != std::string::npos);
+    check("menu image on USB auto-mounted on unit 1", tdUnit[1].mounted && !tdUnit[0].mounted && fast_load(9, "$").find("USBDISK") != std::string::npos);
     IO1[rWRegCurrMenuWAIT] = rmtSD; strcpy(DriveDirPath, "/GONE.D64*");
     prestart();
-    check("missing image: no mount, no stray cwd, no file created", !vdUnit[0].mounted && vdUnit[0].cwd[0] == 0 && !fs_::exists(SD.root / "GONE.D64"));
-    check("... the USB unit still restores its own remembered image", vdUnit[1].mounted);
+    check("missing image: no mount, no stray cwd, no file created", !tdUnit[0].mounted && tdUnit[0].cwd[0] == 0 && !fs_::exists(SD.root / "GONE.D64"));
+    check("... the USB unit still restores its own remembered image", tdUnit[1].mounted);
 
     // ---- remembered mounts (/.tdrive sidecar on each unit's own card) ----
     fs_::remove(SD.root / ".tdrive"); fs_::remove(firstPartition.root / ".tdrive");
@@ -715,53 +715,53 @@ int main(int argc, char **argv)
     check("unmounting removes the sidecar", !fs_::exists(SD.root / ".tdrive"));
     cmd15("CD:/"); cmd15("CD:GAME.D64"); status15();
     prestart();                                                                  // power cycle, launched from a non-disk menu
-    check("restart re-mounts the remembered SD image", vdUnit[0].mounted && vdUnit[0].cwd[0] == 0 && fast_load(8, "$").find("GAMEDISK") != std::string::npos);
-    check("... and the USB unit has none (never mounted since reset)", !vdUnit[1].mounted);
+    check("restart re-mounts the remembered SD image", tdUnit[0].mounted && tdUnit[0].cwd[0] == 0 && fast_load(8, "$").find("GAMEDISK") != std::string::npos);
+    check("... and the USB unit has none (never mounted since reset)", !tdUnit[1].mounted);
     IO1[rWRegCurrMenuWAIT] = rmtSD; strcpy(DriveDirPath, "/SUB/INNER.D64*");
     prestart();
-    check("a menu image beats the remembered one, and becomes the remembered one", strcmp(vdUnit[0].cwd, "/SUB") == 0 && vdUnit[0].mounted);
+    check("a menu image beats the remembered one, and becomes the remembered one", strcmp(tdUnit[0].cwd, "/SUB") == 0 && tdUnit[0].mounted);
     IO1[rWRegCurrMenuWAIT] = rmtTeensy;
     prestart();
-    check("... on the following restart too", strcmp(vdUnit[0].cwd, "/SUB") == 0 && vdUnit[0].mounted);
+    check("... on the following restart too", strcmp(tdUnit[0].cwd, "/SUB") == 0 && tdUnit[0].mounted);
     // an REU Special IO frees the menu's listing ahead of TDrive's PreStart, which resets the menu source and DriveDirPath
     // (0.9.0.55-0.9.0.57 then mounted the remembered image instead of the one launched from)
     cmd15("CD:/"); cmd15("CD:GAME.D64"); status15();                             // remembered: GAME.D64 in the root
     IO1[rWRegCurrMenuWAIT] = rmtSD; strcpy(DriveDirPath, "/SUB/INNER.D64*");
     g_reu_free = true; prestart(); g_reu_free = false;
-    check("REU Special IO: the menu image is mounted although the listing was freed first", strcmp(vdUnit[0].cwd, "/SUB") == 0 && vdUnit[0].mounted
+    check("REU Special IO: the menu image is mounted although the listing was freed first", strcmp(tdUnit[0].cwd, "/SUB") == 0 && tdUnit[0].mounted
           && fast_load(8, "$").find("GAMEDISK") == std::string::npos);
     IO1[rWRegCurrMenuWAIT] = rmtTeensy; strcpy(DriveDirPath, "/");
     fs_::remove(SD.root / "SUB" / "INNER.D64");
     prestart();
-    check("remembered image deleted: starts unmounted, cwd reset", !vdUnit[0].mounted && vdUnit[0].cwd[0] == 0 && !fs_::exists(SD.root / ".tdrive"));
+    check("remembered image deleted: starts unmounted, cwd reset", !tdUnit[0].mounted && tdUnit[0].cwd[0] == 0 && !fs_::exists(SD.root / ".tdrive"));
 
     // ---- D71 / D81 images and paths in names ----
     EEPROM.m[eepAdTDriveDevs] = 0xFF; EEPROM.m[eepAdTDriveDevs + 1] = 0xFF;
     IO1[rWRegCurrMenuWAIT] = rmtTeensy; strcpy(DriveDirPath, "/");
     prestart();
     cmd15("CD:/"); status15();
-    cmd15("CD:BIG.D81"); check("D81 mounts", status15() == "00, OK,00,00\r" && vdUnit[0].mounted && vdUnit[0].d.fmt == D64_FMT_D81 && vdUnit[0].d.tracks == 80);
+    cmd15("CD:BIG.D81"); check("D81 mounts", status15() == "00, OK,00,00\r" && tdUnit[0].mounted && tdUnit[0].d.fmt == D64_FMT_D81 && tdUnit[0].d.tracks == 80);
     check("D81 listing", fast_load(8, "$").find("BIGDISK") != std::string::npos);
     check("fast load from a D81", fast_load(8, "H81", &rc) == std::string("\x01\x08") + "d81!" && rc == 0);
     check("fast save to a D81", fast_save(8, "SAVED81", std::string(5000, 'R')) == 0);
     g_ms += 1000; PollingHndlr_TDrive();
     cmd15("CD:/");
     d = fast_load(8, "$/TWO.D71");
-    check("LOAD\"$/TWO.D71\" lists the D71 and leaves nothing mounted", d.find("TWODISK") != std::string::npos && !vdUnit[0].mounted && vdUnit[0].cwd[0] == 0);
+    check("LOAD\"$/TWO.D71\" lists the D71 and leaves nothing mounted", d.find("TWODISK") != std::string::npos && !tdUnit[0].mounted && tdUnit[0].cwd[0] == 0);
     check("... and the sidecar was not touched by the temporary mount", !fs_::exists(SD.root / ".tdrive"));
     d = fast_load(8, "$==/TWO.D71");
-    check("LOAD\"$==/TWO.D71\" mounts it for good", d.find("TWODISK") != std::string::npos && vdUnit[0].mounted && vdUnit[0].d.fmt == D64_FMT_D71 && fs_::exists(SD.root / ".tdrive"));
+    check("LOAD\"$==/TWO.D71\" mounts it for good", d.find("TWODISK") != std::string::npos && tdUnit[0].mounted && tdUnit[0].d.fmt == D64_FMT_D71 && fs_::exists(SD.root / ".tdrive"));
     cmd15("CD:/");
     check("... 1328 blocks free on a blank 1571 side-by-side count", d.find("BLOCKS FREE") != std::string::npos);
-    check("path through an image: LOAD\"/BIG.D81/H81\"", fast_load(8, "/BIG.D81/H81", &rc) == std::string("\x01\x08") + "d81!" && rc == 0 && vdUnit[0].d.fmt == D64_FMT_D81);
+    check("path through an image: LOAD\"/BIG.D81/H81\"", fast_load(8, "/BIG.D81/H81", &rc) == std::string("\x01\x08") + "d81!" && rc == 0 && tdUnit[0].d.fmt == D64_FMT_D81);
     check("a saved D81 file is on the image after the flush (reopen)", (cmd15("CD:/"), cmd15("CD:BIG.D81"), fast_load(8, "SAVED81", &rc).size() == 5002));
     cmd15("CD:/"); status15();
-    cmd15("CD:BAD.D64"); check("an image with an error table mounts, the table is kept (it marks a sector bad)", status15() == "00, OK,00,00\r" && vdUnit[0].errTab && vdUnit[0].d.errtab);
+    cmd15("CD:BAD.D64"); check("an image with an error table mounts, the table is kept (it marks a sector bad)", status15() == "00, OK,00,00\r" && tdUnit[0].errTab && tdUnit[0].d.errtab);
     check("LOAD of a file starting on a bad sector fails", fast_load(8, "BADF", &rc).empty() && rc == 4);
     check("... the error channel names the code and sector", status15() == "23,READ ERROR,17,00\r");
     check("a file on good sectors of the same image loads", fast_load(8, "GOODF", &rc) == std::string("\x01\x08") + "good" && rc == 0 && status15() == "00, OK,00,00\r");
-    cmd15("CD:/"); check("unmount drops the table", status15() == "00, OK,00,00\r" && !vdUnit[0].errTab);
-    cmd15("CD:OKTAB.D64"); check("an all-OK error table is not kept", status15() == "00, OK,00,00\r" && vdUnit[0].mounted && !vdUnit[0].errTab);
+    cmd15("CD:/"); check("unmount drops the table", status15() == "00, OK,00,00\r" && !tdUnit[0].errTab);
+    cmd15("CD:OKTAB.D64"); check("an all-OK error table is not kept", status15() == "00, OK,00,00\r" && tdUnit[0].mounted && !tdUnit[0].errTab);
     check("... and the image lists", fast_load(8, "$").find("OKTAB") != std::string::npos);
     cmd15("CD:/"); status15();
     cmd15("UI"); check("UI answers 73", status15().rfind("73,", 0) == 0);
@@ -769,8 +769,8 @@ int main(int argc, char **argv)
 
     // ---- plain files on the card with nothing mounted ----
     { FILE *f = fopen((SD.root / "plain.prg").c_str(), "wb"); fputs("\x01\x08" "plain program", f); fclose(f); }
-    check("LOAD\"PLAIN.PRG\" reads a plain file from the card", fast_load(8, "PLAIN.PRG", &rc) == std::string("\x01\x08") + "plain program" && rc == 0 && !vdUnit[0].mounted);
-    check("... LOAD\"PLAIN\" finds it too, and the file is closed afterwards", fast_load(8, "PLAIN", &rc).size() == 15 && rc == 0 && !vdUnit[0].plain);
+    check("LOAD\"PLAIN.PRG\" reads a plain file from the card", fast_load(8, "PLAIN.PRG", &rc) == std::string("\x01\x08") + "plain program" && rc == 0 && !tdUnit[0].mounted);
+    check("... LOAD\"PLAIN\" finds it too, and the file is closed afterwards", fast_load(8, "PLAIN", &rc).size() == 15 && rc == 0 && !tdUnit[0].plain);
     fast_load(8, "NOSUCH", &rc); check("... a missing plain file is 62", rc == 4 && status15().rfind("62,", 0) == 0);
 
     // ---- MD: / RD: folders on the card ----
@@ -783,14 +783,14 @@ int main(int argc, char **argv)
 
     // ---- N:NAME.D64,ID with nothing mounted: a new image on the card, mounted and formatted ----
     cmd15("N:MADE.D81,MD");
-    check("N:MADE.D81 creates, mounts and formats a new image", status15() == "00, OK,00,00\r" && vdUnit[0].mounted && vdUnit[0].d.fmt == D64_FMT_D81
+    check("N:MADE.D81 creates, mounts and formats a new image", status15() == "00, OK,00,00\r" && tdUnit[0].mounted && tdUnit[0].d.fmt == D64_FMT_D81
           && fs_::file_size(SD.root / "made.d81") == 819200);
     d = fast_load(8, "$");
     check("... its listing: disk name MADE, ID MD, 3160 blocks free", d.find("MADE") != std::string::npos && d.find(" MD 3D") != std::string::npos
           && d.find("\x58\x0c" "BLOCKS FREE") != std::string::npos);
-    check("... the sidecar remembers it", (VD_Flush(&vdUnit[0]), fs_::exists(SD.root / ".tdrive")));
+    check("... the sidecar remembers it", (TD_Flush(&tdUnit[0]), fs_::exists(SD.root / ".tdrive")));
     cmd15("CD:/"); status15();
-    cmd15("N:MADE.D81,XX"); check("... and N: never replaces an existing file", status15().rfind("63,FILE EXISTS", 0) == 0 && !vdUnit[0].mounted);
+    cmd15("N:MADE.D81,XX"); check("... and N: never replaces an existing file", status15().rfind("63,FILE EXISTS", 0) == 0 && !tdUnit[0].mounted);
     cmd15("N:/SUB/NEW2.D64"); check("N: with a folder path creates the image there", status15() == "00, OK,00,00\r" && fs_::file_size(SD.resolve("/sub/new2.d64")) == 174848);
     cmd15("CD:/"); status15();
 
@@ -798,7 +798,7 @@ int main(int argc, char **argv)
     cmd15("N:GONE.D71"); status15(); cmd15("CD:/"); status15();
     cmd15("S:GONE.D71,NOSUCH.D64"); check("S:GONE.D71 deletes the image (a missing name counts 0)", status15() == "01,FILES SCRATCHED,01,00\r" && !fs_::exists(SD.root / "gone.d71"));
     cmd15("S:SUB/NEW2.D64"); check("... with a folder path, and the folder stays as it was", status15() == "01,FILES SCRATCHED,01,00\r"
-          && !fs_::exists(SD.resolve("/sub/new2.d64")) && vdUnit[0].cwd[0] == 0);
+          && !fs_::exists(SD.resolve("/sub/new2.d64")) && tdUnit[0].cwd[0] == 0);
     cmd15("S:PLAIN.PRG"); check("... anything but an image name is 64, the file stays", status15().rfind("64,", 0) == 0 && fs_::exists(SD.root / "plain.prg"));
     cmd15("N:KEEP.D64"); status15(); cmd15("CD:/"); status15();
     fs_::permissions(SD.root / "keep.d64", fs_::perms::owner_write | fs_::perms::group_write | fs_::perms::others_write, fs_::perm_options::remove);
@@ -819,16 +819,16 @@ int main(int argc, char **argv)
         IO1[rwRegScratch] = 11; kernal_prestart();
         check("probe: 11 free -> USB, done, the replacement KERNAL is back", IO1[rwRegScratch] == 0 && r1(VIO_DEV1) == 11 && fBusSnoop == &KernalCheck);
         InitHndlr_TDrive();
-        g_scans = 0; nm = call(VD_LISTEN, 9); call(VD_UNLSN);
+        g_scans = 0; nm = call(TD_LISTEN, 9); call(TD_UNLSN);
         check("probe: no KERNAL scan afterwards, 9 is the SD unit", g_scans == 0 && !(nm & 0x100));
         IO1[rwRegScratch] = 0; kernal_prestart();                       // the next launch: an ordinary PreStart again
         check("probe: the next launch asks again", IO1[rwRegScratch] == 2 && fBusSnoop == nullptr);
-        IO1[rwRegScratch] = VD_ProbeEnd; kernal_prestart();              // the menu found no free number
+        IO1[rwRegScratch] = TD_ProbeEnd; kernal_prestart();              // the menu found no free number
         check("probe: the menu's end marker hooks the KERNAL back in", IO1[rwRegScratch] == 0 && fBusSnoop == &KernalCheck);
         IO1[rwRegScratch] = 0; kernal_prestart();
         IO1[rwRegScratch] = 0; kernal_prestart();                       // a reset in mid-probe: the next launch starts afresh
         check("probe: a launch after an unfinished probe asks again", IO1[rwRegScratch] == 2);
-        IO1[rwRegScratch] = VD_ProbeEnd; kernal_prestart();
+        IO1[rwRegScratch] = TD_ProbeEnd; kernal_prestart();
         g_real_drives.clear(); g_probes = 0;
         prestart();
         check("probe: empty bus -> 8 / 9, one probe", g_probes == 1 && r1(VIO_DEV0) == 8 && r1(VIO_DEV1) == 9 && fBusSnoop == &KernalCheck);
@@ -852,23 +852,23 @@ int main(int argc, char **argv)
     prestart(false); InitHndlr_TDrive();
     check("scan pending after start-up", vio->scan_state == 1 && r1(VIO_DEV0) == 8 && r1(VIO_DEV1) == 9);
     g_scans = 0;
-    nm = call(VD_LISTEN, 8);
+    nm = call(TD_LISTEN, 8);
     check("first transaction triggered exactly one scan", g_scans == 1);
     check("real drive 8 is not ours any more", (nm & 0x100) != 0);
-    call(VD_UNLSN);
+    call(TD_UNLSN);
     check("SD drive now 10, USB drive 11 (registers and unit numbers)", r1(VIO_DEV0) == 10 && r1(VIO_DEV1) == 11 && vio->vd.dev[0] == 10 && vio->vd.dev[1] == 11);
     check("the automatic numbers were not written to EEPROM", EEPROM.m[eepAdTDriveDevs] == 0xFF && EEPROM.m[eepAdTDriveDevs + 1] == 0xFF);
     check("device 10 serves the SD card", fast_load(10, "$").find("\"SD:/") != std::string::npos);
     g_real_drives.clear();
-    prestart(false); InitHndlr_TDrive(); call(VD_LISTEN, 8); call(VD_UNLSN);
+    prestart(false); InitHndlr_TDrive(); call(TD_LISTEN, 8); call(TD_UNLSN);
     check("empty bus again: back to 8 / 9", r1(VIO_DEV0) == 8 && r1(VIO_DEV1) == 9);
     EEPROM.m[eepAdTDriveDevs] = 12; EEPROM.m[eepAdTDriveDevs + 1] = 0;           // SD fixed to 12, USB automatic
     g_real_drives = {8};
-    prestart(false); InitHndlr_TDrive(); g_scans = 0; call(VD_LISTEN, 12); call(VD_UNLSN);
+    prestart(false); InitHndlr_TDrive(); g_scans = 0; call(TD_LISTEN, 12); call(TD_UNLSN);
     check("fixed SD number is kept, USB takes the first free one (9)", g_scans == 1 && r1(VIO_DEV0) == 12 && r1(VIO_DEV1) == 9);
     check("banner bytes: SD fixed 12, USB automatic", banner(0) == 12 && banner(1) == 0xFF);
     EEPROM.m[eepAdTDriveDevs] = 12; EEPROM.m[eepAdTDriveDevs + 1] = 13;
-    prestart(false); InitHndlr_TDrive(); g_scans = 0; call(VD_LISTEN, 12); call(VD_UNLSN);
+    prestart(false); InitHndlr_TDrive(); g_scans = 0; call(TD_LISTEN, 12); call(TD_UNLSN);
     check("both fixed: no scan at all", g_scans == 0 && r1(VIO_DEV0) == 12 && r1(VIO_DEV1) == 13);
     check("banner bytes: both fixed (12, 13)", banner(0) == 12 && banner(1) == 13);
     EEPROM.m[eepAdTDriveDevs] = 12; EEPROM.m[eepAdTDriveDevs + 1] = 0;
@@ -898,7 +898,7 @@ int main(int argc, char **argv)
         check("remote get: the border flash counters close the object", has(0, ",\"dbg\":{\"brd\":[") && has(0, "\"}}"));
 
         g_tick = 1;                                           // let the waiting code see time pass
-        check("remote set: mounts an image on SD", TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg) == 0 && vdUnit[0].mounted);
+        check("remote set: mounts an image on SD", TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg) == 0 && tdUnit[0].mounted);
         check("remote get: shows it", has(0, "\"mounted\":true,\"writable\":true,\"path\":\"/GAME.D64\",\"cwd\":\"/\""));
         g_tick = 0;
         int rc = -1;
@@ -915,24 +915,24 @@ int main(int argc, char **argv)
         check("... the C64 sees the new disk", (g_tick = 0, fast_load(8, "$").find("TWODISK") != std::string::npos));
         g_tick = 1;
         { std::ifstream f(SD.root / ".tdrive"); std::string t((std::istreambuf_iterator<char>(f)), {}); check("... and it is the remembered one", t == "/SUB/COPY.D64"); }
-        check("remote set: D81 works too", TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg) == 0 && vdUnit[0].d.fmt == D64_FMT_D81);
+        check("remote set: D81 works too", TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg) == 0 && tdUnit[0].d.fmt == D64_FMT_D81);
 
         check("remote set: USB unit", TDrive_RemoteSet(1, "/USB.D64", msg, sizeof msg) == 0 && has(1, "\"path\":\"/USB.D64\"") && has(0, "/BIG.D81"));
 
-        // quiet point: a mailbox command just happened, so the swap waits at least VD_QuietMs
-        g_tick = 0; call(VD_LISTEN, 8); call(VD_SECOND, 0x6F); call(VD_UNLSN); lastActivityMs = millis();
+        // quiet point: a mailbox command just happened, so the swap waits at least TD_QuietMs
+        g_tick = 0; call(TD_LISTEN, 8); call(TD_SECOND, 0x6F); call(TD_UNLSN); lastActivityMs = millis();
         g_tick = 1; uint32_t t0 = g_ms;
-        check("remote set: waits for a quiet moment after C64 activity", TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg) == 0 && g_ms - t0 >= VD_QuietMs);
+        check("remote set: waits for a quiet moment after C64 activity", TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg) == 0 && g_ms - t0 >= TD_QuietMs);
 
-        // a LOAD in progress holds the swap off until it is abandoned (VD_StaleMs), then the open transfer is dropped
+        // a LOAD in progress holds the swap off until it is abandoned (TD_StaleMs), then the open transfer is dropped
         g_tick = 0; put_name("HELLO"); call(VIO_FLOAD_OPEN, 8, 5); lastActivityMs = millis();
         check("fast LOAD is open", vio->fl_active);
         g_tick = 1; t0 = g_ms;
-        check("remote set: a LOAD in progress delays it until the transfer is stale", TDrive_RemoteSet(0, "/SUB/COPY.D64", msg, sizeof msg) == 0 && g_ms - t0 >= VD_StaleMs);
+        check("remote set: a LOAD in progress delays it until the transfer is stale", TDrive_RemoteSet(0, "/SUB/COPY.D64", msg, sizeof msg) == 0 && g_ms - t0 >= TD_StaleMs);
 
         // an open file channel does not block the swap but is closed by it
         g_tick = 0; cmd15("CD:/"); cmd15("CD:GAME.D64"); status15();
-        call(VD_LISTEN, 8); call(VD_SECOND, 0xF2); for (char c : std::string("HELLO")) call(VD_CIOUT, (uint8_t)c); call(VD_UNLSN);
+        call(TD_LISTEN, 8); call(TD_SECOND, 0xF2); for (char c : std::string("HELLO")) call(TD_CIOUT, (uint8_t)c); call(TD_UNLSN);
         check("a file channel is open", tdrive_chan_mode(&vio->vd, 0, 2) == 1);
         g_tick = 1;
         check("remote set closes the channels on the unit", TDrive_RemoteSet(0, "/SUB/COPY.D64", msg, sizeof msg) == 0 && tdrive_chan_mode(&vio->vd, 0, 2) == 0);
@@ -941,8 +941,8 @@ int main(int argc, char **argv)
         {
             auto slurp = [](const fs_::path &p) { std::ifstream f(p, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), {}); };
             g_tick = 0; cmd15("CD:/"); cmd15("CD:GAME.D64"); status15();
-            call(VD_LISTEN, 8); call(VD_SECOND, 0xF3); for (char c : std::string("LOG,S,W")) call(VD_CIOUT, (uint8_t)c); call(VD_UNLSN);
-            call(VD_LISTEN, 8); call(VD_SECOND, 0x63); for (char c : std::string("LINE ONE\r")) call(VD_CIOUT, (uint8_t)c); call(VD_UNLSN);
+            call(TD_LISTEN, 8); call(TD_SECOND, 0xF3); for (char c : std::string("LOG,S,W")) call(TD_CIOUT, (uint8_t)c); call(TD_UNLSN);
+            call(TD_LISTEN, 8); call(TD_SECOND, 0x63); for (char c : std::string("LINE ONE\r")) call(TD_CIOUT, (uint8_t)c); call(TD_UNLSN);
             check("a write channel is open", tdrive_chan_mode(&vio->vd, 0, 3) == 3);
             std::string before = slurp(SD.root / "SUB" / "COPY.D64");
             g_tick = 1;
@@ -956,20 +956,20 @@ int main(int argc, char **argv)
         }
 
         g_tick = 0; check("the drive status channel is clean after a swap", status15() == "00, OK,00,00\r"); g_tick = 1;
-        check("remote set: empty path unmounts, folder stays, sidecar gone", TDrive_RemoteSet(0, "", msg, sizeof msg) == 0 && !vdUnit[0].mounted && !fs_::exists(SD.root / ".tdrive") && has(0, "\"mounted\":false,\"writable\":false,\"path\":\"\",\"cwd\":\"/SUB\""));
+        check("remote set: empty path unmounts, folder stays, sidecar gone", TDrive_RemoteSet(0, "", msg, sizeof msg) == 0 && !tdUnit[0].mounted && !fs_::exists(SD.root / ".tdrive") && has(0, "\"mounted\":false,\"writable\":false,\"path\":\"\",\"cwd\":\"/SUB\""));
         g_tick = 0;
         check("... the C64 lists the host folder again", fast_load(8, "$").find("\"SD:/SUB") != std::string::npos);
 
         // the remote directory listing (and the swap) wait for the drive to be quiet; a C64 that never lets go gets a refusal
-        g_tick = 0; call(VD_LISTEN, 8); call(VD_UNLSN); lastActivityMs = millis();
+        g_tick = 0; call(TD_LISTEN, 8); call(TD_UNLSN); lastActivityMs = millis();
         g_tick = 1; t0 = g_ms;
-        check("quiet wait: returns 0 after the C64's last command has aged", TDrive_RemoteQuiet(msg, sizeof msg) == 0 && g_ms - t0 >= VD_QuietMs && msg[0] == 0);
+        check("quiet wait: returns 0 after the C64's last command has aged", TDrive_RemoteQuiet(msg, sizeof msg) == 0 && g_ms - t0 >= TD_QuietMs && msg[0] == 0);
         t0 = g_ms;
         check("quiet wait: already quiet returns at once", TDrive_RemoteQuiet(msg, sizeof msg) == 0 && g_ms - t0 < 5);
         TDrive_RemoteSet(0, "/GAME.D64", msg, sizeof msg);
-        g_on_millis = [] { if (!vioHot.pending) { w1(VIO_LEN, 0); w1(VIO_ARG, 0); w1(VIO_CMD, VD_UNLSN); } };   // never lets go
+        g_on_millis = [] { if (!vioHot.pending) { w1(VIO_LEN, 0); w1(VIO_ARG, 0); w1(VIO_CMD, TD_UNLSN); } };   // never lets go
         t0 = g_ms;
-        check("quiet wait: a C64 that keeps talking is refused after the limit", TDrive_RemoteQuiet(msg, sizeof msg) == 2 && strstr(msg, "busy") && g_ms - t0 >= VD_SwapWaitMs);
+        check("quiet wait: a C64 that keeps talking is refused after the limit", TDrive_RemoteQuiet(msg, sizeof msg) == 2 && strstr(msg, "busy") && g_ms - t0 >= TD_SwapWaitMs);
         check("remote set in the same situation fails (2) and leaves the disk alone", TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg) == 2 && has(0, "/GAME.D64"));
         g_on_millis = nullptr; g_tick = 0;
         vioReady = false;
@@ -1001,10 +1001,10 @@ int main(int argc, char **argv)
         TDrive_RemoteIdleSet(0, "/GAME.D64", msg, sizeof msg);
         IO1[rWRegCurrMenuWAIT] = rmtTeensy; DriveDirPath[0] = 0;
         prestart();
-        check("idle set then start: the image is mounted", vdUnit[0].mounted && fast_load(8, "$").find("GAMEDISK") != std::string::npos);
+        check("idle set then start: the image is mounted", tdUnit[0].mounted && fast_load(8, "$").find("GAMEDISK") != std::string::npos);
         { std::ofstream f(firstPartition.root / ".tdrive", std::ios::trunc); f << "//USB.D64"; }
         prestart();
-        check("a sidecar with a doubled slash mounts with cwd root, not //", vdUnit[1].mounted && vdUnit[1].cwd[0] == 0);
+        check("a sidecar with a doubled slash mounts with cwd root, not //", tdUnit[1].mounted && tdUnit[1].cwd[0] == 0);
         check("... and the status path has a single slash", TDrive_RemoteStatus(1, js, sizeof js) > 0 && strstr(js, "\"path\":\"/USB.D64\"") && !strstr(js, "//"));
         fs_::remove(SD.root / ".tdrive"); fs_::remove(firstPartition.root / ".tdrive");
     }
@@ -1032,11 +1032,11 @@ int main(int argc, char **argv)
         IO1[rWRegCurrMenuWAIT] = rmtTeensy; DriveDirPath[0] = 0;
         prestart(); InitHndlr_TDrive();
         check("offset 8 (the old BORDER register) is unused: reads 0", r1(8) == 0);
-        check("border request idle", vdBorderReq == VIO_BRD_IDLE);
+        check("border request idle", tdBorderReq == VIO_BRD_IDLE);
         g_ms += 5000;
 
-        auto run = [&](uint32_t ms) { Trace t; uint8_t last = vdBorderReq; uint32_t t0 = g_ms;
-                                      for (uint32_t i = 0; i < ms; i += 5) { g_ms += 5; PollingHndlr_TDrive(); if (vdBorderReq != last) { last = vdBorderReq; t.push_back({g_ms - t0, last}); } }
+        auto run = [&](uint32_t ms) { Trace t; uint8_t last = tdBorderReq; uint32_t t0 = g_ms;
+                                      for (uint32_t i = 0; i < ms; i += 5) { g_ms += 5; PollingHndlr_TDrive(); if (tdBorderReq != last) { last = tdBorderReq; t.push_back({g_ms - t0, last}); } }
                                       return t; };
         auto near = [](uint32_t a, uint32_t b) { return a + 20 >= b && a <= b + 20; };
         auto tap = [&](int n) { for (int i = 0; i < n; i++) { SpecialBtn_TDrive(false); g_ms += 50; SpecialBtn_TDrive(true); g_ms += 100; } };
@@ -1112,9 +1112,9 @@ int main(int argc, char **argv)
 
         // errors flash red, quickly, for 2 s
         auto red_ok = [&](const Trace &t) {
-            if (t.size() != 2 * VD_ErrFlashes + 2 - 1 + 0 && t.size() != 2 * VD_ErrFlashes + 2) return false;
+            if (t.size() != 2 * TD_ErrFlashes + 2 - 1 + 0 && t.size() != 2 * TD_ErrFlashes + 2) return false;
             if (t[0].second != VIO_BRD_SAVE || t.back().second != VIO_BRD_IDLE) return false;
-            for (int i = 0; i < VD_ErrFlashes; i++) if (t[1 + 2 * i].second != (VIO_BRD_SET | VD_ColorRed) || t[2 + 2 * i].second != VIO_BRD_RESTORE) return false;
+            for (int i = 0; i < TD_ErrFlashes; i++) if (t[1 + 2 * i].second != (VIO_BRD_SET | TD_ColorRed) || t[2 + 2 * i].second != VIO_BRD_RESTORE) return false;
             return t.back().first - t[0].first >= 1800 && t.back().first - t[0].first <= 2300;
         };
         put(SD, "tdrive-config.txt", "/MISSING.D64,4,1\n/ALSO/GONE.D64\n");
@@ -1137,7 +1137,7 @@ int main(int argc, char **argv)
         // a tap while a long flash is still running: the colour is given back first (saving mid-flash would remember the flash colour)
         put(SD, "tdrive-config.txt", "/SUB/INNER.D64,7,1\n/GAME.D64,3,3\n");
         tap(1); run(1000);
-        check("alt: the long sequence (GAME, 3 flashes) is under way", cur(0) == "/game.d64" && vdBorderReq != VIO_BRD_IDLE);
+        check("alt: the long sequence (GAME, 3 flashes) is under way", cur(0) == "/game.d64" && tdBorderReq != VIO_BRD_IDLE);
         tap(1); t = run(8000);
         int lastSave = -1; for (int i = 0; i < (int)t.size(); i++) if (t[i].second == VIO_BRD_SAVE) lastSave = i;
         bool restoredBeforeSave = lastSave >= 1 && t[lastSave - 1].second == VIO_BRD_RESTORE && t[lastSave].first - t[lastSave - 1].first >= 100;
@@ -1153,14 +1153,14 @@ int main(int argc, char **argv)
 
         // ---- host text files for TDrive Config: !CONFIG / !STATE ----
         {
-            auto open_ch = [&](int ch, const std::string &name) { call(VD_LISTEN, 8); call(VD_SECOND, (uint8_t)(0xF0 | ch)); for (char c : name) call(VD_CIOUT, (uint8_t)c); call(VD_UNLSN); };
-            auto close_ch = [&](int ch) { call(VD_LISTEN, 8); call(VD_SECOND, (uint8_t)(0xE0 | ch)); call(VD_UNLSN); };
-            auto write_ch = [&](int ch, const std::string &text) { call(VD_LISTEN, 8); call(VD_SECOND, (uint8_t)(0x60 | ch)); for (char c : text) call(VD_CIOUT, (uint8_t)c); call(VD_UNLSN); };
+            auto open_ch = [&](int ch, const std::string &name) { call(TD_LISTEN, 8); call(TD_SECOND, (uint8_t)(0xF0 | ch)); for (char c : name) call(TD_CIOUT, (uint8_t)c); call(TD_UNLSN); };
+            auto close_ch = [&](int ch) { call(TD_LISTEN, 8); call(TD_SECOND, (uint8_t)(0xE0 | ch)); call(TD_UNLSN); };
+            auto write_ch = [&](int ch, const std::string &text) { call(TD_LISTEN, 8); call(TD_SECOND, (uint8_t)(0x60 | ch)); for (char c : text) call(TD_CIOUT, (uint8_t)c); call(TD_UNLSN); };
             auto read_ch = [&](int ch, bool *eoi_at_end = nullptr) {
                 std::string out; uint8_t st = 0; int guard = 0;
-                call(VD_TALK, 8); call(VD_TKSA, (uint8_t)(0x60 | ch));
-                for (; guard < 5000; guard++) { int d = call(VD_ACPTR, 0, 0, &st) & 0xFF; if (st & 0x02) break; out.push_back((char)d); if (st & 0x40) { if (eoi_at_end) *eoi_at_end = true; break; } }
-                call(VD_UNTLK);
+                call(TD_TALK, 8); call(TD_TKSA, (uint8_t)(0x60 | ch));
+                for (; guard < 5000; guard++) { int d = call(TD_ACPTR, 0, 0, &st) & 0xFF; if (st & 0x02) break; out.push_back((char)d); if (st & 0x40) { if (eoi_at_end) *eoi_at_end = true; break; } }
+                call(TD_UNTLK);
                 return out;
             };
             auto slurp = [&](const fs_::path &q) { std::ifstream f(q, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); };
@@ -1217,12 +1217,12 @@ int main(int argc, char **argv)
     // ---- the ID registers the KERNAL's reset hook reads ----
     check("ID registers read $D6 $64 (the reset hook's VIO_MENU gate)", r1(VIO_ID0) == 0xD6 && r1(VIO_ID1) == 0x64);
     w1(VIO_ID0, 0); check("ID registers ignore writes", r1(VIO_ID0) == 0xD6);
-    g_bus_out = 0x77; IO1Hndlr_TDrive(VD_MboxBase + VIO_NREGS, true);
+    g_bus_out = 0x77; IO1Hndlr_TDrive(TD_MboxBase + VIO_NREGS, true);
     check("the register after ID1 is not driven", g_bus_out == 0x77);
 
-    // ---- the KERNAL image (VD_KernalImage): /TDrive/kernal.bin, else the C64's own ROM patched in memory ----
+    // ---- the KERNAL image (TD_KernalImage): /TDrive/kernal.bin, else the C64's own ROM patched in memory ----
     {
-        check("CRC-32 of \"123456789\" is the standard check value", VD_Crc32((const uint8_t *)"123456789", 9) == 0xCBF43926);
+        check("CRC-32 of \"123456789\" is the standard check value", TD_Crc32((const uint8_t *)"123456789", 9) == 0xCBF43926);
         std::string stock, patched;
         if (argc > 5) {
             std::ifstream a(argv[4], std::ios::binary), b(argv[5], std::ios::binary);
@@ -1239,60 +1239,60 @@ int main(int argc, char **argv)
             bool asked = IO1[rwRegScratch] != 0;
             for (int dev = 8; IO1[rwRegScratch]; dev++) {
                 if (dev <= 30 && g_real_drives.count(dev)) continue;
-                IO1[rwRegScratch] = dev <= 30 ? (uint8_t)dev : VD_ProbeEnd;
+                IO1[rwRegScratch] = dev <= 30 ? (uint8_t)dev : TD_ProbeEnd;
                 TDrive_ProbeStep();
             }
-            if (!asked) { call(VD_LISTEN, 31); call(VD_UNLSN); }
+            if (!asked) { call(TD_LISTEN, 31); call(TD_UNLSN); }
             return asked;
         };
         if (stock.size() == 8192 && patched.size() == 8192) {
-            uint32_t crc = VD_Crc32((const uint8_t *)stock.data(), 8192);
-            for (const stcVDKnownKernal &k : VD_KnownKernals) known |= k.crc == crc;
+            uint32_t crc = TD_Crc32((const uint8_t *)stock.data(), 8192);
+            for (const stcVDKnownKernal &k : TD_KnownKernals) known |= k.crc == crc;
         }
         if (known) {
             memcpy(g_c64_kernal, stock.data(), 8192); g_dma_reads = 0; memset(img, 0xEE, sizeof img);
-            bool ok = VD_KernalImage(img);
+            bool ok = TD_KernalImage(img);
             check("no /TDrive/kernal.bin: the C64's KERNAL read by DMA, patched == tools/build.py's kernal-tr.bin",
                   ok && g_dma_reads == 8 && memcmp(img, patched.data(), 8192) == 0);
             g_c64_kernal[0x123] ^= 1;                                       // one byte off: a ROM the patch does not know
-            check("a ROM not on the list (one byte changed) serves nothing", !VD_KernalImage(img));
+            check("a ROM not on the list (one byte changed) serves nothing", !TD_KernalImage(img));
             g_c64_kernal[0x123] ^= 1;
-            check("... and the menu probes the bus", VD_KernalImage(img) && probe_asked());
+            check("... and the menu probes the bus", TD_KernalImage(img) && probe_asked());
             memcpy(g_c64_kernal, patched.data(), 8192);                     // this build's TDrive KERNAL in the machine itself (a ROM, a MEGA65 core)
             check("the C64's own KERNAL is this build's TDrive one: nothing served (the mailbox answers it)",
-                  !VD_KernalImage(img) && VD_KernalPatchPresent(img));
+                  !TD_KernalImage(img) && TD_KernalPatchPresent(img));
             check("... and the menu probes the bus through it (its mailbox gate keeps the menu's registers safe)", probe_asked());
             g_c64_kernal[0x1CE3] ^= 1;                                      // another build's TDrive KERNAL (one byte of a run differs; the banner tag is there)
-            check("another build's TDrive KERNAL: nothing served", !VD_KernalImage(img) && !VD_KernalPatchPresent(img));
+            check("another build's TDrive KERNAL: nothing served", !TD_KernalImage(img) && !TD_KernalPatchPresent(img));
             check("... and no bus probe in the menu (an older one would write the menu's EEPROM registers)", !probe_asked());
             memcpy(g_c64_kernal, stock.data(), 8192);
         } else {
             puts("SKIP the patched-ROM comparison: no known stock KERNAL given (run.py STOCK.bin)");
         }
         memset(g_c64_kernal, 0xAA, sizeof g_c64_kernal);
-        check("unknown ROM: nothing served", !VD_KernalImage(img));
+        check("unknown ROM: nothing served", !TD_KernalImage(img));
         check("... and no bus probe in the menu", !probe_asked());
-        memcpy(g_c64_kernal + 0x1500, "VDUNITS:", 8);
-        check("an unknown ROM with the banner tag (a TDrive KERNAL of another build): nothing served, no probe", !VD_KernalImage(img) && !probe_asked());
+        memcpy(g_c64_kernal + 0x1500, "TDUNITS:", 8);
+        check("an unknown ROM with the banner tag (a TDrive KERNAL of another build): nothing served, no probe", !TD_KernalImage(img) && !probe_asked());
         memset(g_c64_kernal, 0xAA, sizeof g_c64_kernal);
         g_dma_fail = true;
-        check("DMA read fails: nothing served", !VD_KernalImage(img));
+        check("DMA read fails: nothing served", !TD_KernalImage(img));
         fs_::create_directories(SD.root / "TDrive");
         std::string mine(8192, '\0'); for (int i = 0; i < 8192; i++) mine[i] = (char)(i * 7);
         put(SD, "TDrive/kernal.bin", mine);
         g_dma_reads = 0; memset(img, 0, sizeof img);
-        check("/TDrive/kernal.bin is served as it is, no DMA read", VD_KernalImage(img) && memcmp(img, mine.data(), 8192) == 0 && g_dma_reads == 0);
+        check("/TDrive/kernal.bin is served as it is, no DMA read", TD_KernalImage(img) && memcmp(img, mine.data(), 8192) == 0 && g_dma_reads == 0);
         put(SD, "TDrive/kernal.bin", mine.substr(0, 8000));
-        check("a kernal.bin of the wrong size is not used (and the failed DMA read then serves nothing)", !VD_KernalImage(img));
+        check("a kernal.bin of the wrong size is not used (and the failed DMA read then serves nothing)", !TD_KernalImage(img));
         g_dma_fail = false;
         if (known) {
             memcpy(g_c64_kernal, stock.data(), 8192);
-            check("... with DMA working, the C64's own ROM patched instead", VD_KernalImage(img) && memcmp(img, patched.data(), 8192) == 0);
+            check("... with DMA working, the C64's own ROM patched instead", TD_KernalImage(img) && memcmp(img, patched.data(), 8192) == 0);
         }
         fs_::remove_all(SD.root / "TDrive");
         uint8_t z[8192]; memset(z, 0, sizeof z);
         check("the patch table lays its runs inside $E000-$FFFF (the reset hook's JMP at $FCE2)",
-              VD_KernalPatchApply(z) && z[0x1CE2] == 0x4C && z[0x1CE3] == 0x75 && z[0x1CE4] == 0xF8);
+              TD_KernalPatchApply(z) && z[0x1CE2] == 0x4C && z[0x1CE3] == 0x75 && z[0x1CE4] == 0xF8);
     }
 
     // ---- drive LED: blinks against its previous state while the drive is busy, then gets that state back ----
@@ -1300,19 +1300,19 @@ int main(int argc, char **argv)
         g_tick = 0; g_on_millis = nullptr;
         for (int i = 0; i < 100; i++) { g_ms += 5; PollingHndlr_TDrive(); }    // let any earlier blink run out
         check("LED: idle state kept by the polling handler", g_led);
-        check("LED: a command for another device (a real drive) leaves it alone", (call(VD_LISTEN, 20) & 0x100) && g_led);
-        call(VD_UNLSN);
+        check("LED: a command for another device (a real drive) leaves it alone", (call(TD_LISTEN, 20) & 0x100) && g_led);
+        call(TD_UNLSN);
         for (int i = 0; i < 100; i++) { g_ms += 5; PollingHndlr_TDrive(); }
         check("LED: still on", g_led);
         uint32_t t0 = g_ms;
-        check("LED: a command for our drive turns it the other way at once", !(call(VD_LISTEN, 8) & 0x100) && !g_led);
-        call(VD_UNLSN);
+        check("LED: a command for our drive turns it the other way at once", !(call(TD_LISTEN, 8) & 0x100) && !g_led);
+        call(TD_UNLSN);
         std::vector<std::pair<uint32_t, bool>> t;
         for (bool last = g_led; g_ms - t0 < 400; ) { g_ms += 5; PollingHndlr_TDrive(); if (g_led != last) { last = g_led; t.push_back({g_ms - t0, last}); } }
         check("LED: blinks every 75 ms and is back on 180 ms after the last command",
               t.size() == 3 && t[0] == std::make_pair(75u, true) && t[1] == std::make_pair(150u, false) && t[2] == std::make_pair(180u, true));
         g_led = false;                                                          // a pause or a cartridge turned it off
-        call(VD_LISTEN, 8); call(VD_UNLSN);
+        call(TD_LISTEN, 8); call(TD_UNLSN);
         check("LED: from off, a command turns it on", g_led);
         for (int i = 0; i < 40; i++) { g_ms += 5; PollingHndlr_TDrive(); }
         check("LED: ... and back off after the hold", !g_led);
@@ -1355,20 +1355,20 @@ int main(int argc, char **argv)
             auto run = [&](int ms) { for (int t = 0; t < ms; t += 5) { g_ms += 5; if (agent) PollingHndlr_TDriveAgent(); else PollingHndlr_TDrive();
                                      if (seen.empty() || seen.back() != g_c64_ram[0xD020]) seen.push_back(g_c64_ram[0xD020]); } };
             g_holds = 0; g_held_writes = 0;
-            VD_Flash(5, 2, 250, 750);
+            TD_Flash(5, 2, 250, 750);
             run(2500);
             snprintf(what, sizeof what, "%s flash: blue border -> green, back, green, back (two flashes), one hold per change", who); check(what,
                   seen == std::vector<uint8_t>({0xF6, 0xF5, 0xF6, 0xF5, 0xF6}) && g_held_writes == 4 && g_holds == 5);
             g_c64_ram[0xD031] = 0x00;                               // I/O banked out: RAM (or the character ROM) at $D000
             g_held_writes = 0; seen.clear();
-            VD_Flash(2, 1, 250, 750);
+            TD_Flash(2, 1, 250, 750);
             run(400);
             snprintf(what, sizeof what, "%s flash: I/O not mapped in: nothing written", who); check(what, g_held_writes == 0 && g_c64_ram[0xD020] == 0xF6);
             vic(0xF6);
             run(2000);
             snprintf(what, sizeof what, "%s: once I/O is back, the flash still happens and ends on the saved colour", who); check(what, g_held_writes >= 1 && g_c64_ram[0xD020] == 0xF6);
             isFrozen = true; g_holds = 0;
-            VD_Flash(2, 1, 250, 750); run(2000);
+            TD_Flash(2, 1, 250, 750); run(2000);
             snprintf(what, sizeof what, "%s flash: never while the host holds the C64", who); check(what, g_holds == 0);
             isFrozen = false; run(2000);
         }
@@ -1376,38 +1376,38 @@ int main(int argc, char **argv)
         IO1[rwRegPwrUpDefaults2] = rpud2AltBtnNone; InitHndlr_TDrive();
         for (int i = 0; i < 0x20; i++) g_c64_ram[0xD020 + i] = i <= 0x0E ? (uint8_t)(0xF0 | i) : 0xFF;   // the VIC, I/O mapped in
         g_c64_ram[0xD020] = 0xF6;
-        memset((void *)g_vd_bc, 0, sizeof g_vd_bc); memset((void *)g_vd_fault, 0, sizeof g_vd_fault);
-        VD_TraceButton(false);
+        memset((void *)g_td_bc, 0, sizeof g_td_bc); memset((void *)g_td_fault, 0, sizeof g_td_fault);
+        TD_TraceButton(false);
         check("trace: the button press is a crumb (TDrive owns it, setting None)",
-              (g_vd_bc[0] & 0xF) == 0xF && g_vd_bc[1] >> 24 == VDT_Button && (g_vd_bc[1] & 0x4) && (g_vd_bc[4] & 0xFF) == rpud2AltBtnNone && (g_vd_bc[4] >> 8 & 1));
-        VD_Flash(5, 1, 250, 750);
+              (g_td_bc[0] & 0xF) == 0xF && g_td_bc[1] >> 24 == TDT_Button && (g_td_bc[1] & 0x4) && (g_td_bc[4] & 0xFF) == rpud2AltBtnNone && (g_td_bc[4] >> 8 & 1));
+        TD_Flash(5, 1, 250, 750);
         for (int t = 0; t < 2000; t += 5) { g_ms += 5; PollingHndlr_TDrive(); }
-        check("trace: a flash leaves 'released' last, holds and writes counted", g_vd_bc[1] >> 24 == VDT_Released && (g_vd_bc[0] & 0x3F) == 0x3F &&
-              (g_vd_bc[5] >> 16) >= 3 && (g_vd_bc[5] & 0xFFFF) == 2 && g_vd_bc[6] == 0);
-        uint32_t keep[8]; for (int i = 0; i < 8; i++) keep[i] = g_vd_bc[i];
-        VD_TraceBoot();
-        check("trace: the boot copy takes the crumbs and clears them", vdTraceBoot.valid && !vdTraceBoot.fault && vdTraceBoot.bc[0] == keep[1] && g_vd_bc[0] == 0);
+        check("trace: a flash leaves 'released' last, holds and writes counted", g_td_bc[1] >> 24 == TDT_Released && (g_td_bc[0] & 0x3F) == 0x3F &&
+              (g_td_bc[5] >> 16) >= 3 && (g_td_bc[5] & 0xFFFF) == 2 && g_td_bc[6] == 0);
+        uint32_t keep[8]; for (int i = 0; i < 8; i++) keep[i] = g_td_bc[i];
+        TD_TraceBoot();
+        check("trace: the boot copy takes the crumbs and clears them", tdTraceBoot.valid && !tdTraceBoot.fault && tdTraceBoot.bc[0] == keep[1] && g_td_bc[0] == 0);
         prestart();
-        check("trace: printed once, at the next PreStart", !vdTraceBoot.valid);
+        check("trace: printed once, at the next PreStart", !tdTraceBoot.valid);
         // a CPU fault record as the core leaves it: len 11, CRC-32 over the first 10 words
-        g_vd_fault[0] = 11; g_vd_fault[2] = 0x8200; g_vd_fault[6] = 0x60001234;
-        { uint32_t crc = 0xFFFFFFFF; for (int w = 0; w < 10; w++) { crc ^= g_vd_fault[w]; for (int i = 0; i < 32; i++) crc = (crc >> 1) ^ (crc & 1) * 0xEDB88320; } g_vd_fault[10] = crc; }
-        VD_TraceBoot();
-        check("trace: a CPU fault record is recognised", vdTraceBoot.valid && vdTraceBoot.fault && vdTraceBoot.ret == 0x60001234);
-        g_vd_fault[10] ^= 1; VD_TraceBoot();
-        check("trace: ... and a bad CRC is not", !vdTraceBoot.fault);
-        vdTraceBoot.valid = false;
+        g_td_fault[0] = 11; g_td_fault[2] = 0x8200; g_td_fault[6] = 0x60001234;
+        { uint32_t crc = 0xFFFFFFFF; for (int w = 0; w < 10; w++) { crc ^= g_td_fault[w]; for (int i = 0; i < 32; i++) crc = (crc >> 1) ^ (crc & 1) * 0xEDB88320; } g_td_fault[10] = crc; }
+        TD_TraceBoot();
+        check("trace: a CPU fault record is recognised", tdTraceBoot.valid && tdTraceBoot.fault && tdTraceBoot.ret == 0x60001234);
+        g_td_fault[10] ^= 1; TD_TraceBoot();
+        check("trace: ... and a bad CRC is not", !tdTraceBoot.fault);
+        tdTraceBoot.valid = false;
         // "!nodma" in the list: the disk switches, the border is never touched
         InitHndlr_TDrive();
         std::ofstream(SD.root / "tdrive-config.txt", std::ios::binary) << "!nodma\n/GAME.D64,3,2\n/SUB/INNER.D64,7,1\n";
         g_holds = 0; g_held_writes = 0;
         SpecialBtn_TDrive(false); g_ms += 50; SpecialBtn_TDrive(true);
         for (int t = 0; t < 4000; t += 5) { g_ms += 5; PollingHndlr_TDrive(); }
-        check("!nodma: the disk switched without a single hold", vdUnit[0].mounted && g_holds == 0 && g_held_writes == 0 && vdNoDma);
+        check("!nodma: the disk switched without a single hold", tdUnit[0].mounted && g_holds == 0 && g_held_writes == 0 && tdNoDma);
         std::ofstream(SD.root / "tdrive-config.txt", std::ios::binary) << "/GAME.D64,3,1\n";
         SpecialBtn_TDrive(false); g_ms += 50; SpecialBtn_TDrive(true);
         for (int t = 0; t < 4000; t += 5) { g_ms += 5; PollingHndlr_TDrive(); }
-        check("... and without the line the flash holds again", !vdNoDma && g_holds > 0);
+        check("... and without the line the flash holds again", !tdNoDma && g_holds > 0);
         IO1[rwRegPwrUpDefaults2] = 0; fSpecialBtnChange = nullptr;
     }
 

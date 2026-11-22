@@ -1,5 +1,5 @@
 #include "tdrive_io.h"
-#include "vd_cfg.h"
+#include "td_cfg.h"
 #include <string.h>
 
 VD_COLD void vio_init(vio_t *v, vio_hot_t *hot)
@@ -45,33 +45,33 @@ VD_COLD static int bus(vio_t *v, uint8_t c, uint8_t a, uint8_t *data)
 
 VD_COLD static void send_name_open(vio_t *v, uint8_t dev, uint8_t sa)
 {
-    bus(v, VD_LISTEN, dev, 0);
-    bus(v, VD_SECOND, sa, 0);
-    for (unsigned i = 0; i < v->h->len && i < VIO_WIN; i++) bus(v, VD_CIOUT, v->h->window[i], 0);
-    bus(v, VD_UNLSN, 0, 0);
+    bus(v, TD_LISTEN, dev, 0);
+    bus(v, TD_SECOND, sa, 0);
+    for (unsigned i = 0; i < v->h->len && i < VIO_WIN; i++) bus(v, TD_CIOUT, v->h->window[i], 0);
+    bus(v, TD_UNLSN, 0, 0);
 }
 
 VD_COLD static void close_chan(vio_t *v, uint8_t dev, uint8_t sa)
 {
-    bus(v, VD_LISTEN, dev, 0); bus(v, VD_SECOND, sa, 0); bus(v, VD_UNLSN, 0, 0);
+    bus(v, TD_LISTEN, dev, 0); bus(v, TD_SECOND, sa, 0); bus(v, TD_UNLSN, 0, 0);
 }
 
 VD_COLD static void fload_open(vio_t *v)
 {
     uint8_t dev = v->h->arg, b0, b1 = 0;
     v->fl_active = 0; v->fl_verify = 0;
-    if (bus(v, VD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
-    bus(v, VD_UNLSN, 0, 0);                         /* finish probe transaction */
+    if (bus(v, TD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
+    bus(v, TD_UNLSN, 0, 0);                         /* finish probe transaction */
     send_name_open(v, dev, 0xF0);
-    bus(v, VD_TALK, dev, 0); bus(v, VD_TKSA, 0x60, 0);
-    int st0 = bus(v, VD_ACPTR, 0, &b0);
+    bus(v, TD_TALK, dev, 0); bus(v, TD_TKSA, 0x60, 0);
+    int st0 = bus(v, TD_ACPTR, 0, &b0);
     if (st0 & 0x02) {                               /* nothing came back: file not found */
-        bus(v, VD_UNTLK, 0, 0); close_chan(v, dev, 0xE0);
+        bus(v, TD_UNTLK, 0, 0); close_chan(v, dev, 0xE0);
         v->h->data = 4; return;
     }
     v->fl_eof = (st0 & 0x40) != 0;
-    if (!v->fl_eof) { int st1 = bus(v, VD_ACPTR, 0, &b1); v->fl_eof = (st1 & 0x40) != 0; }
-    bus(v, VD_UNTLK, 0, 0);
+    if (!v->fl_eof) { int st1 = bus(v, TD_ACPTR, 0, &b1); v->fl_eof = (st1 & 0x40) != 0; }
+    bus(v, TD_UNTLK, 0, 0);
     v->h->window[0] = b0; v->h->window[1] = b1;
     v->fl_active = 1; v->fl_dev = dev;
     v->h->data = 0;
@@ -87,14 +87,14 @@ VD_COLD static unsigned fload_read(vio_t *v, uint8_t *buf, unsigned max, uint8_t
     if (!v->fl_active) return 0;
     if (v->fl_eof) { close_chan(v, v->fl_dev, 0xE0); v->fl_active = 0; return 0; }
     int eof = 0, tmo = 0;
-    bus(v, VD_TALK, v->fl_dev, 0); bus(v, VD_TKSA, 0x60, 0);
+    bus(v, TD_TALK, v->fl_dev, 0); bus(v, TD_TKSA, 0x60, 0);
     while (n < max) {
-        int st = bus(v, VD_ACPTR, 0, &d);
+        int st = bus(v, TD_ACPTR, 0, &d);
         if (st & 0x02) { eof = 1; tmo = 1; break; }       /* a read error (bad sector): the load ends here, ST shows $42 */
         buf[n++] = d;
         if (st & 0x40) { eof = 1; break; }
     }
-    bus(v, VD_UNTLK, 0, 0);
+    bus(v, TD_UNTLK, 0, 0);
     *st_out = (uint8_t)(eof ? (tmo ? 0x42 : 0x40) : 0);
     if (eof) { close_chan(v, v->fl_dev, 0xE0); v->fl_active = 0; }
     return n;
@@ -199,8 +199,8 @@ VD_COLD static void fsave_open(vio_t *v)
 {
     uint8_t dev = v->h->arg;
     v->fs_active = 0; v->fs_fail = 0;
-    if (bus(v, VD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
-    bus(v, VD_UNLSN, 0, 0);
+    if (bus(v, TD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
+    bus(v, TD_UNLSN, 0, 0);
     send_name_open(v, dev, 0xF1);
     int unit = tdrive_unit_for(&v->vd, dev);
     if (tdrive_chan_mode(&v->vd, unit, 1) == 3) { v->fs_active = 1; v->fs_dev = dev; v->h->data = 0; }
@@ -209,9 +209,9 @@ VD_COLD static void fsave_open(vio_t *v)
 
 VD_COLD static void fsave_bytes(vio_t *v, const uint8_t *buf, unsigned n)
 {
-    bus(v, VD_LISTEN, v->fs_dev, 0); bus(v, VD_SECOND, 0x61, 0);
-    for (unsigned i = 0; i < n; i++) bus(v, VD_CIOUT, buf[i], 0);
-    bus(v, VD_UNLSN, 0, 0);
+    bus(v, TD_LISTEN, v->fs_dev, 0); bus(v, TD_SECOND, 0x61, 0);
+    for (unsigned i = 0; i < n; i++) bus(v, TD_CIOUT, buf[i], 0);
+    bus(v, TD_UNLSN, 0, 0);
 }
 
 /* 1 = not mine: the save was abandoned (fsave_dma) */
@@ -300,13 +300,13 @@ VD_COLD int vio_poll(vio_t *v)
     if (!v->h->pending) return 0;
     uint8_t c = v->h->cmd, notmine = 0, ask = 0;
     v->h->data = 0; v->h->st = 0;
-    if (c == VD_LISTEN || c == VD_TALK || c == VIO_FLOAD_OPEN || c == VIO_FSAVE_OPEN || c == VIO_FVERIFY_OPEN) {   /* a transaction starts */
+    if (c == TD_LISTEN || c == TD_TALK || c == VIO_FLOAD_OPEN || c == VIO_FSAVE_OPEN || c == VIO_FVERIFY_OPEN) {   /* a transaction starts */
         if (v->scan_state == 1) { v->scan_state = 2; ask = 1; }
         else if (v->scan_state == 2) v->scan_state = 3;                                    /* asked, not answered: this KERNAL does not scan */
     }
     if (ask) {
         /* answer SCANREQ below, execute nothing */
-    } else if (c >= VD_LISTEN && c <= VD_UNTLK) {
+    } else if (c >= TD_LISTEN && c <= TD_UNTLK) {
         uint8_t d, st;
         notmine = (uint8_t)tdrive_mailbox(&v->vd, c, v->h->arg, &d, &st);
         v->h->data = d; v->h->st = st;

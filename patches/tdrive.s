@@ -1,6 +1,6 @@
 ; Virtual-drive hooks for the 8 serial-layer KERNAL entry points (901227-03).
 ; Each hook asks the TR+ mailbox whether it owns the current IEC transaction
-; (the device numbers are configured in the firmware, d64/vd_cfg.h). If not ("not mine"), the displaced original instructions run
+; (the device numbers are configured in the firmware, d64/td_cfg.h). If not ("not mine"), the displaced original instructions run
 ; and flow continues in the stock routine, so real drives still work.
 ;
 ; Mailbox (IO1 on hardware; RAM in the VICE mock build, see Makefile). It sits at $DE10, clear of the
@@ -60,7 +60,7 @@
 
 ; ---- stubs in reclaimed space ----------------------------------------------
 .segment "P_F8E2"
-.export iec_listen, iec_second, iec_unlsn   ; the real bus only: patches/vdbanner.s probes it before the mailbox is live
+.export iec_listen, iec_second, iec_unlsn   ; the real bus only: patches/tdbanner.s probes it before the mailbox is live
 
 .include "vcall.inc"
 
@@ -79,7 +79,7 @@ hk_listen:
         jsr vcall
         bcs iec_listen
         rts
-iec_listen:                     ; the stock LISTEN without the hook (also called by the power-on banner, patches/vdbanner.s)
+iec_listen:                     ; the stock LISTEN without the hook (also called by the power-on banner, patches/tdbanner.s)
         ora #$20
 tl_common:
         jsr $F0A4
@@ -155,7 +155,7 @@ hk_acptr:
 ; ---- fast LOAD ---------------------------------------------------------------
 ; Entered instead of `JSR $F3D5` in the serial LOAD path. Handles LOAD entirely through the mailbox for whatever devices the Teensy
 ; claims: the Teensy streams the file in blocks of <=128 bytes through the IO2 window, or writes parts of it into RAM by DMA
-; (docs/DESIGN.md 49). VERIFY (with VD_DMA_LOAD) opens with FVERIFY_OPEN: only a Teensy that can compare the whole file with RAM by
+; (docs/DESIGN.md 49). VERIFY (with TD_DMA_LOAD) opens with FVERIFY_OPEN: only a Teensy that can compare the whole file with RAM by
 ; DMA takes it, and then every part is a DMA one (DATA = 0, never a window block to store); the Teensy ORs $10 into ST on a
 ; difference, as the stock loop does (docs/DESIGN.md 51). Anything else (also a name too long for the window), or a
 ; firmware without the fast commands, replays the displaced JSR and continues
@@ -164,7 +164,7 @@ hk_acptr:
 ; A name of WINSZ bytes or more does not fit: C=1 ("not mine"), and the byte-level path opens it instead.
 open_named:
         pha
-        jsr vd_here             ; no handler: write neither the window nor LEN (see vcall)
+        jsr td_here             ; no handler: write neither the window nor LEN (see vcall)
         bne @long
         ldy $B7                 ; never 0 here: LOAD / SAVE stop at MISSING FILE NAME first
         bmi @long               ; >= 128 = WINSZ
@@ -192,7 +192,7 @@ fl_slowx:
 fl_slow:
         jsr $F3D5
         jmp $F4CB
-.if VD_DMA_LOAD
+.if TD_DMA_LOAD
 fl_hook:
         stx $A4                 ; original SA: 0 = load to caller's address (the Teensy reads it by DMA for a VERIFY)
         lda #C_FLOAD_OPEN
@@ -214,7 +214,7 @@ fl_hook:
         tya
         beq @ok
         cmp #5
-.if VD_DMA_LOAD                 ; (bytes saved for the DMA requests; VD_DMA_LOAD=0 stays byte-identical to the 0.9.0.51 image)
+.if TD_DMA_LOAD                 ; (bytes saved for the DMA requests; TD_DMA_LOAD=0 stays byte-identical to the 0.9.0.51 image)
         beq fl_fail             ; DEVICE NOT PRESENT
         jmp $F704               ; FILE NOT FOUND
 .else
@@ -237,7 +237,7 @@ fl_hook:
         lda $C4
         sta $AF
 @go:    jsr $F5D2               ; "LOADING"
-.if VD_DMA_LOAD
+.if TD_DMA_LOAD
 @blk:   lda $AE                 ; where the next byte goes: ARG/LEN. The Teensy answers with a window block as FLOAD_BLK, or
         sta $A7                 ; (DATA = 0) has written the next part straight into RAM by DMA and moved $AE/$AF on itself
         lda $AF                 ; (VIO_FLOAD_DMA, d64/tdrive_io.h; never below $0200 or in $D000-$DFFF)
@@ -281,7 +281,7 @@ fs_hook:
         jsr $F68F               ; "SAVING name"
         lda $A4
         cmp #5
-.if VD_DMA_LOAD
+.if TD_DMA_LOAD
         beq @ff                 ; DEVICE NOT PRESENT
         tax
 .else
@@ -302,7 +302,7 @@ fs_hook:
         lda #C_FSAVE_BLK
         jsr vcall
 @loop:
-.if VD_DMA_LOAD
+.if TD_DMA_LOAD
         lda #C_FSAVE_DMA        ; DATA = 0: the Teensy read the next part from RAM by DMA ($AC-$AF), saved it and moved $AC/$AD on:
         jsr vcall               ; ask again. Anything else (DATA 1: not by DMA here; not mine from an older firmware, A = $A7 = the
         beq @loop               ; device) sends the next window block (docs/DESIGN.md 51)
@@ -363,12 +363,12 @@ rst_hook:
         sei
         txs                     ; vcall needs a stack
         lda MBX_ID              ; both bytes, the first read twice: a bit-mixed late answer must not pass
-        cmp #VD_ID0
+        cmp #TD_ID0
         bne @stock
         cmp MBX_ID
         bne @stock
         lda MBX_ID+1
-        cmp #VD_ID1
+        cmp #TD_ID1
         bne @stock
         lda #C_MENU
         jsr vcall
@@ -408,14 +408,14 @@ rst_hook_end:
 ; vcall's time-out, as before this check. ID1 is not asked (one byte is enough for that, and the tape space is nearly full).
 ; Uses $A5 (vcall clears it next); X, Y kept. Also asked by open_named before it fills the window and LEN.
 .segment "P_F8E2"
-vd_here:
+td_here:
         lda #$7C                ; counts up: $7C..$7F, then $80 (N=1, Z=0) ends it
         sta $A5
 @try:   lda MBX_ID
-        cmp #VD_ID0
+        cmp #TD_ID0
         beq @out                ; Z=1
         inc $A5
         bpl @try
 @out:   rts
-vd_here_end:
-.assert vd_here_end <= $FB8E, lderror, "reclaimed tape space overflows into the stock KERNAL"
+td_here_end:
+.assert td_here_end <= $FB8E, lderror, "reclaimed tape space overflows into the stock KERNAL"

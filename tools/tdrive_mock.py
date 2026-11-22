@@ -8,11 +8,11 @@ Drives x64sc through its binary monitor: a store-checkpoint on MBX+0 (CMD)
 stops the CPU, this script plays the Teensy (state machine for IEC devices
 8/9 backed by a tiny in-memory 'disk'), writes DATA/STAT/ST and resumes.
 usage: tdrive_mock.py KERNAL.bin [basic|scan|variant]
-       tdrive_mock.py STOCK.bin agent|agentscan VDAGENT.prg
-       tdrive_mock.py - agent128|agent128scan VDAGENT128.prg
+       tdrive_mock.py STOCK.bin agent|agentscan TDAGENT.prg
+       tdrive_mock.py - agent128|agent128scan TDAGENT128.prg
   basic    the whole feature test, no physical drives (the SD drive ends up as device 8 after the start-up scan)
   scan     physical 1541s at 8 and 10: the SD and USB drives must end up at 9 and 11
-  agent    the plain-TeensyROM build (docs/DESIGN.md 52, 53) on the stock KERNAL: the agent (vector/vdagent.s) served from GeoRAM's
+  agent    the plain-TeensyROM build (docs/DESIGN.md 52, 53) on the stock KERNAL: the agent (vector/tdagent.s) served from GeoRAM's
            page at $DE00 (the stand-in for the Teensy's IO1 page), all logic in d64/tdrive_vec.c (VVec); SYS to its INSTALL entry
   agentscan  the same with physical 1541s at 8 and 10: chaining to the real drives, copies between a real drive and ours
   agent128 the agent on a C128 in 128 mode (docs/DESIGN.md 56): x128 with its own ROMs (BASIC 7.0), the agent in GeoRAM as above,
@@ -34,7 +34,7 @@ import ctypes, os, random, shutil, tempfile, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from d64py import LIB, Disk, TDrive, VIO, VVec, R_DEV0, R_DEV1, R_CMD, WIN_SIZE
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "tests"))
-from test_vio import HostStruct               # ctypes layout of vd_host_t
+from test_vio import HostStruct               # ctypes layout of td_host_t
 import suite_files
 
 OK = b"00, OK,00,00\r"
@@ -58,8 +58,8 @@ def make_image(workdir, bad):
 
 
 # ---- VICE binary monitor ---------------------------------------------------
-# VD_MONITOR_PORT moves it off 6502, so two VICE runs (another checkout's tests, say) do not meet on one monitor
-MON_PORT = int(os.environ.get("VD_MONITOR_PORT", "6502"))
+# TD_MONITOR_PORT moves it off 6502, so two VICE runs (another checkout's tests, say) do not meet on one monitor
+MON_PORT = int(os.environ.get("TD_MONITOR_PORT", "6502"))
 
 
 class Mon:
@@ -150,11 +150,11 @@ def main(kernal, scenario="basic", vecprg=None):
         drives = ["-drive8type", "1541", "-drive8truedrive", "-drive9type", "0", "-drive10type", "1541", "-drive10truedrive", "-drive11type", "0",
                   "-8", str(workdir / "real8.d64"), "-10", str(workdir / "real10.d64")]
         if c128: drives = ["-drive8type", "1541", "-drive8truedrive", "-drive9type", "0", "-drive10type", "0", "-8", str(workdir / "real8.d64")]
-    # the banner bytes as VD_BannerUnits (firmware/IOH_TDrive.c) writes them into the served image: SD automatic, USB automatic
+    # the banner bytes as TD_BannerUnits (firmware/IOH_TDrive.c) writes them into the served image: SD automatic, USB automatic
     # in `scan` (a stick is attached there) and absent in `basic`
     if not c128:
         kimg = bytearray(pathlib.Path(kernal).read_bytes())
-        tag = kimg.find(b"VDUNITS:")
+        tag = kimg.find(b"TDUNITS:")
         if tag >= 0: kimg[tag + 8:tag + 10] = bytes([0xFF, 0xFF if scan else 0xFE])
         kernal = str(workdir / "kernal.bin"); pathlib.Path(kernal).write_bytes(kimg)
     # -config + -default: start from VICE's defaults, not the user's vicerc (another VICE session saved e.g. Drive8Type=1581 with
@@ -753,7 +753,7 @@ def main(kernal, scenario="basic", vecprg=None):
         run('NEW\r')
 
         # --- no TDrive handler (no ID: no TR, another Special IO, a KERNAL in a ROM socket): nothing written to the mailbox, the real
-        #     bus at once (vd_here), not after vcall's ~1 s time-out per call ---
+        #     bus at once (td_here), not after vcall's ~1 s time-out per call ---
         n0 = len(log)
         m.write(MBX + 9, [0xDE, 0xDE]); m.write(MBX, [0x77, 0x55]); m.write(MBX + 5, [0x33])
         run('LOAD"X",8\r', "DEVICE NOT PRESENT")
@@ -797,7 +797,7 @@ def main(kernal, scenario="basic", vecprg=None):
         shutil.rmtree(workdir, ignore_errors=True)
 
 def agent_tests(m, run, check, service, log, disk, big, workdir, vec, real):
-    """The plain-TeensyROM build on the stock KERNAL: vector/vdagent.s in GeoRAM, the logic in d64/tdrive_vec.c. `real` is set in
+    """The plain-TeensyROM build on the stock KERNAL: vector/tdagent.s in GeoRAM, the logic in d64/tdrive_vec.c. `real` is set in
     agentscan (true-drive 1541s at 8 and 10)."""
     res = {"ok": True}
     def chk(label, cond):

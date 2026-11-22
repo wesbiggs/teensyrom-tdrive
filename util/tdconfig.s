@@ -527,7 +527,7 @@ perr:   jsr msgbeg
 
 ; Which registers: the KERNAL build's ($DE10) when $DE19/$DE1A read $D6 $64, else the agent's ($DF00) when $DF09/$DF0A do. Reads only
 ; until then: under the agent IO1 is its code (the handler keeps writes there), under the TR menu's own handler $DE11 / $DE15 are
-; EEPROM-backed settings. A few tries, as the KERNAL's vd_here does (a late answer reads a mixed byte).
+; EEPROM-backed settings. A few tries, as the KERNAL's td_here does (a late answer reads a mixed byte).
 ; C=0 found: every MREG operand points at it, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
 findmb: ldx #4
 @try:   lda MBXK+MBXID0

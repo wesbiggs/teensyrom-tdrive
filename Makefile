@@ -13,31 +13,31 @@ test-hash: build/kernal-tr.bin README.md
 	python3 -I tools/check_kernal_hash.py $(STOCK) build/kernal-tr.bin
 
 # VICE mock image: mailbox in RAM at $C800 (VICE has no IO1 device to hook)
-build/kernal-vd.bin: $(wildcard patches/*.s) tools/build.py
+build/kernal-td.bin: $(wildcard patches/*.s) tools/build.py
 	python3 -I tools/build.py $(STOCK) $@ -D 'MBX=$$C800' -D 'WIN=$$CA00'
 
-# without the DMA LOAD request (VD_DMA_LOAD=0: window blocks only, the upstream TeensyROM build; docs/DESIGN.md 49). The VICE scan run uses it.
+# without the DMA LOAD request (TD_DMA_LOAD=0: window blocks only, the upstream TeensyROM build; docs/DESIGN.md 49). The VICE scan run uses it.
 build/kernal-tr-nodma.bin: $(wildcard patches/*.s) tools/build.py
-	python3 -I tools/build.py $(STOCK) $@ -D VD_DMA_LOAD=0
-build/kernal-vd-nodma.bin: $(wildcard patches/*.s) tools/build.py
-	python3 -I tools/build.py $(STOCK) $@ -D 'MBX=$$C800' -D 'WIN=$$CA00' -D VD_DMA_LOAD=0
+	python3 -I tools/build.py $(STOCK) $@ -D TD_DMA_LOAD=0
+build/kernal-td-nodma.bin: $(wildcard patches/*.s) tools/build.py
+	python3 -I tools/build.py $(STOCK) $@ -D 'MBX=$$C800' -D 'WIN=$$CA00' -D TD_DMA_LOAD=0
 # The agent (docs/DESIGN.md 53), VICE flavour: served from GeoRAM's page at $DE08, mailbox as above
-build/vdagent-vice.prg: vector/vdagent.s vector/agent.cfg patches/mailbox.inc
+build/tdagent-vice.prg: vector/tdagent.s vector/agent.cfg patches/mailbox.inc
 	mkdir -p build
-	ca65 -I patches -D 'MBX=$$C800' -D 'WIN=$$CA00' -o build/vdagent-vice.o vector/vdagent.s
-	ld65 -C vector/agent.cfg -S 0xDE08 -o $@ build/vdagent-vice.o
+	ca65 -I patches -D 'MBX=$$C800' -D 'WIN=$$CA00' -o build/tdagent-vice.o vector/tdagent.s
+	ld65 -C vector/agent.cfg -S 0xDE08 -o $@ build/tdagent-vice.o
 
 # ... and for x128 in 128 mode (docs/DESIGN.md 56): the same agent bytes, the mailbox below $4000 (RAM in the system bank)
-build/vdagent128-vice.prg: vector/vdagent.s vector/agent.cfg patches/mailbox.inc
+build/tdagent128-vice.prg: vector/tdagent.s vector/agent.cfg patches/mailbox.inc
 	mkdir -p build
-	ca65 -I patches -D 'MBX=$$3F00' -D 'WIN=$$3F80' -o build/vdagent128-vice.o vector/vdagent.s
-	ld65 -C vector/agent.cfg -S 0xDE08 -o $@ build/vdagent128-vice.o
+	ca65 -I patches -D 'MBX=$$3F00' -D 'WIN=$$3F80' -o build/tdagent128-vice.o vector/tdagent.s
+	ld65 -C vector/agent.cfg -S 0xDE08 -o $@ build/tdagent128-vice.o
 
-test-agent: build/vdagent-vice.prg build/vdagent128-vice.prg build/libd64.dylib   # the agent + d64/tdrive_vec.c in VICE: the stock C64 KERNAL (mock `agent`, `agentscan`) and a C128 in 128 mode (`agent128`, `agent128scan`; skipped without x128)
-	python3 -I tools/tdrive_mock.py $(STOCK) agent build/vdagent-vice.prg
-	python3 -I tools/tdrive_mock.py $(STOCK) agentscan build/vdagent-vice.prg
-	if command -v x128 >/dev/null; then python3 -I tools/tdrive_mock.py - agent128 build/vdagent128-vice.prg && \
-	   python3 -I tools/tdrive_mock.py - agent128scan build/vdagent128-vice.prg; else echo "x128 not found: agent128 skipped"; fi
+test-agent: build/tdagent-vice.prg build/tdagent128-vice.prg build/libd64.dylib   # the agent + d64/tdrive_vec.c in VICE: the stock C64 KERNAL (mock `agent`, `agentscan`) and a C128 in 128 mode (`agent128`, `agent128scan`; skipped without x128)
+	python3 -I tools/tdrive_mock.py $(STOCK) agent build/tdagent-vice.prg
+	python3 -I tools/tdrive_mock.py $(STOCK) agentscan build/tdagent-vice.prg
+	if command -v x128 >/dev/null; then python3 -I tools/tdrive_mock.py - agent128 build/tdagent128-vice.prg && \
+	   python3 -I tools/tdrive_mock.py - agent128scan build/tdagent128-vice.prg; else echo "x128 not found: agent128 skipped"; fi
 
 D64SRC = d64/d64.c d64/tdrive.c d64/tdrive_io.c d64/tdrive_vec.c
 build/libd64.dylib: $(D64SRC) $(wildcard d64/*.h)
@@ -54,7 +54,7 @@ test-d64: build/libd64.dylib
 	python3 -I tests/test_vvec.py
 
 test-devcfg:
-	cc -std=c99 -Wall -Wextra -Werror -DVD_DEV0=10 -DVD_DEV1=11 -o build/devcfg tests/devcfg.c d64/d64.c d64/tdrive.c && ./build/devcfg
+	cc -std=c99 -Wall -Wextra -Werror -DTD_DEV0=10 -DTD_DEV1=11 -o build/devcfg tests/devcfg.c d64/d64.c d64/tdrive.c && ./build/devcfg
 
 test-fw:
 	python3 -I tests/fw_host/run.py $(STOCK)   # with the stock ROM: the firmware's in-memory patch == kernal-tr.bin
@@ -80,12 +80,12 @@ test-banner:   # the power-on banner's drive numbers in a 6502 simulator with a 
 test-menuprobe: build/libd64.dylib   # the TR menu's launch-time bus probe (firmware/tdrive_probe.asm) in VICE, 1541s at 8 and 10 (skipped without acme)
 	python3 -I tests/menuprobe_vice.py
 
-test-variants: build/libd64.dylib   # the patch on each ROM the firmware patches in memory (VD_KnownKernals), in VICE; ROMs found next to STOCK
+test-variants: build/libd64.dylib   # the patch on each ROM the firmware patches in memory (TD_KnownKernals), in VICE; ROMs found next to STOCK
 	python3 -I tests/variants_vice.py $(STOCK)
 
-test: build/kernal-vd.bin build/kernal-vd-nodma.bin build/kernal-tr-nodma.bin build/libd64.dylib test-d64 test-devcfg test-fw test-reset test-gate test-banner test-tdconfig test-tdcopy test-dmatest test-hash test-menuprobe test-variants test-agent
-	python3 -I tools/tdrive_mock.py build/kernal-vd.bin
-	python3 -I tools/tdrive_mock.py build/kernal-vd-nodma.bin scan
+test: build/kernal-td.bin build/kernal-td-nodma.bin build/kernal-tr-nodma.bin build/libd64.dylib test-d64 test-devcfg test-fw test-reset test-gate test-banner test-tdconfig test-tdcopy test-dmatest test-hash test-menuprobe test-variants test-agent
+	python3 -I tools/tdrive_mock.py build/kernal-td.bin
+	python3 -I tools/tdrive_mock.py build/kernal-td-nodma.bin scan
 
 shot: build/kernal-tr.bin
 	x64sc -warp -kernal $(CURDIR)/build/kernal-tr.bin -limitcycles 5000000 -exitscreenshot $(CURDIR)/build/banner.png

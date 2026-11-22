@@ -73,7 +73,7 @@ The C64's ability to read the 8 KB of RAM under KERNAL ROM ($E000-$FFFF) is used
    | File | SHA-256 |
    |---|---|
    | stock `kernal-901227-03.bin` (input) | `83c60d47047d7beab8e5b7bf6f67f80daa088b7a6a27de0d7e016f6484042721` |
-   | `kernal-tr.bin` from this revision | `e07de56f6e1208b8d1fdbfffdc3fcb0b84723c13e2e68e31a6d8e1faa0ad651c` |
+   | `kernal-tr.bin` from this revision | `baff24adef5acae693014a89aa4d8f8d04f33c06c55f9e0c5e5150e6a7bd45d1` |
    | `kernal-tr.bin` last run on a real C64 (0.9.0.45, commit `02c6490`) | `62704caed1a4f02c795fd5f73bf8e1a428d776cf70fd63c0c739c2aa7719f5cc` |
 
    A different stock hash means a different ROM dump; the patches may not fit it. The "this revision" row is checked by `make test`.

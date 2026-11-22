@@ -1,5 +1,5 @@
 #include "tdrive_vec.h"
-#include "vd_cfg.h"
+#include "td_cfg.h"
 #include <string.h>
 
 /* wait states */
@@ -149,7 +149,7 @@ static int ours(vvec_t *e, uint8_t dev) { return dev >= 4 && tdrive_unit_for(&e-
 #define ZP(a) c->buf[(a) - 0xAE]
 
 /* " ALL RIGHTS RESERVED  TDRIVE SD 8 USB 9" without the leading space: each unit "SD 8" / "SD10" / "NOSD", "USB 9" / "USB11" /
- * "NOUSB" (patches/vdbanner.s); returns its length (38) */
+ * "NOUSB" (patches/tdbanner.s); returns its length (38) */
 VD_COLD static uint8_t banner_text(const tdrive_t *vd, uint8_t *t)
 {
     static const char *const name[2] = { "SD", "USB" };
@@ -308,15 +308,15 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
         sc_poke1(e, 0xB7, c->fnlen);
         if (c->rp & P_C) { sc_ret(e, c, c->ra, c->rx, c->ry, 1); DONE(c); }   /* FILE OPEN, TOO MANY FILES, ... */
         c->stx = 0;
-        bus(e, VD_LISTEN, c->fa, 0, &c->stx);
-        bus(e, VD_SECOND, (uint8_t)(c->sa | 0xF0), 0, &c->stx);           /* the table's SA is SA | $60 */
-        if (c->stx & 0x80) { bus(e, VD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, c->stx); ERROR(5); }
+        bus(e, TD_LISTEN, c->fa, 0, &c->stx);
+        bus(e, TD_SECOND, (uint8_t)(c->sa | 0xF0), 0, &c->stx);           /* the table's SA is SA | $60 */
+        if (c->stx & 0x80) { bus(e, TD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, c->stx); ERROR(5); }
         for (c->i = 0; c->i < c->fnlen; c->i = (uint16_t)(c->i + c->n)) {
             c->n = (uint8_t)(c->fnlen - c->i > VV_CHUNK ? VV_CHUNK : c->fnlen - c->i);
             BPEEK(c->fnbank, (uint16_t)(c->fnadr + c->i), c->n);
-            for (int j = 0; j < c->n; j++) bus(e, VD_CIOUT, c->buf[j], 0, &c->stx);
+            for (int j = 0; j < c->n; j++) bus(e, TD_CIOUT, c->buf[j], 0, &c->stx);
         }
-        bus(e, VD_UNLSN, 0, 0, &c->stx);
+        bus(e, TD_UNLSN, 0, 0, &c->stx);
         sc_poke1(e, 0x90, c->stx);
         sc_ret(e, c, c->a, c->x, c->y, 0);
         DONE(c);
@@ -336,18 +336,18 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
             if (c->sa & 0x80) CHAIN();
             /* C128: CLOSE with C set leaves a drive's command channel open on the drive (stock $F1CF), as DCLOSE's U-commands need */
             if (e->machine == VV_M_C128 && (c->p & P_C) && c->fa >= 8 && (c->sa & 0x0F) == 0x0F) CHAIN();
-            bus(e, VD_LISTEN, c->fa, 0, 0);
-            bus(e, VD_SECOND, (uint8_t)((c->sa & 0xEF) | 0xE0), 0, 0);
-            bus(e, VD_UNLSN, 0, 0, 0);
+            bus(e, TD_LISTEN, c->fa, 0, 0);
+            bus(e, TD_SECOND, (uint8_t)((c->sa & 0xEF) | 0xE0), 0, 0);
+            bus(e, TD_UNLSN, 0, 0, 0);
             sc_poke1(e, (uint16_t)(KN->files + 20 + c->idx), (uint8_t)(c->sa | 0x80));   /* now the stock CLOSE only drops the entry */
             CHAIN();
         }
         if (c->entry == VV_E_CHKIN) {
-            bus(e, VD_TALK, c->fa, 0, &c->stx);
-            if (!(c->sa & 0x80)) bus(e, VD_TKSA, c->sa, 0, &c->stx);
+            bus(e, TD_TALK, c->fa, 0, &c->stx);
+            if (!(c->sa & 0x80)) bus(e, TD_TKSA, c->sa, 0, &c->stx);
         } else {
-            bus(e, VD_LISTEN, c->fa, 0, &c->stx);
-            if (!(c->sa & 0x80)) bus(e, VD_SECOND, c->sa, 0, &c->stx);
+            bus(e, TD_LISTEN, c->fa, 0, &c->stx);
+            if (!(c->sa & 0x80)) bus(e, TD_SECOND, c->sa, 0, &c->stx);
         }
         {
             uint8_t z[3] = { c->la, c->sa, c->fa };
@@ -361,14 +361,14 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
     }
 
     if (c->entry == VV_E_CLRCH || c->entry == VV_E_CLALL) {
-        if (c->dflto >= 4 && !bus(e, VD_UNLSN, 0, 0, 0)) sc_poke1(e, 0x9A, 3);
-        if (c->dfltn >= 4 && !bus(e, VD_UNTLK, 0, 0, 0)) sc_poke1(e, 0x99, 0);
+        if (c->dflto >= 4 && !bus(e, TD_UNLSN, 0, 0, 0)) sc_poke1(e, 0x9A, 3);
+        if (c->dfltn >= 4 && !bus(e, TD_UNTLK, 0, 0, 0)) sc_poke1(e, 0x99, 0);
         CHAIN();                                        /* the stock routine finds nothing of ours left to end */
     }
 
     if (c->entry == VV_E_BASIN) {                       /* also GETIN for devices 4 and up */
         uint8_t d = 0, s = 0;
-        if (c->dfltn < 4 || c->st || bus(e, VD_ACPTR, 0, &d, &s)) CHAIN();   /* ST set: the stock code returns CR */
+        if (c->dfltn < 4 || c->st || bus(e, TD_ACPTR, 0, &d, &s)) CHAIN();   /* ST set: the stock code returns CR */
         if (s) sc_poke1(e, 0x90, (uint8_t)(c->st | s));
         sc_ret(e, c, d, c->x, c->y, 0);
         DONE(c);
@@ -376,7 +376,7 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
 
     if (c->entry == VV_E_BSOUT) {
         uint8_t s = 0;
-        if (c->dflto < 4 || bus(e, VD_CIOUT, c->a, 0, &s)) CHAIN();
+        if (c->dflto < 4 || bus(e, TD_CIOUT, c->a, 0, &s)) CHAIN();
         if (s) sc_poke1(e, 0x90, (uint8_t)(c->st | s));
         sc_ret(e, c, c->a, c->x, c->y, 0);              /* A = the byte sent: BASIC's PRINT depends on it */
         DONE(c);
@@ -391,29 +391,29 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
         CALL(KN->searching, 0, 0, 0);
         sc_poke1(e, 0xB9, 0x60);
         c->stx = 0;
-        bus(e, VD_LISTEN, c->fa, 0, &c->stx);
-        bus(e, VD_SECOND, 0xF0, 0, &c->stx);
-        if (c->stx & 0x80) { bus(e, VD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, 0x80); ERROR(5); }
+        bus(e, TD_LISTEN, c->fa, 0, &c->stx);
+        bus(e, TD_SECOND, 0xF0, 0, &c->stx);
+        if (c->stx & 0x80) { bus(e, TD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, 0x80); ERROR(5); }
         for (c->i = 0; c->i < c->fnlen; c->i = (uint16_t)(c->i + c->n)) {
             c->n = (uint8_t)(c->fnlen - c->i > VV_CHUNK ? VV_CHUNK : c->fnlen - c->i);
             BPEEK(c->fnbank, (uint16_t)(c->fnadr + c->i), c->n);
-            for (int j = 0; j < c->n; j++) bus(e, VD_CIOUT, c->buf[j], 0, 0);
+            for (int j = 0; j < c->n; j++) bus(e, TD_CIOUT, c->buf[j], 0, 0);
         }
-        bus(e, VD_UNLSN, 0, 0, 0);
+        bus(e, TD_UNLSN, 0, 0, 0);
         c->stx = 0;
-        bus(e, VD_TALK, c->fa, 0, &c->stx);
-        bus(e, VD_TKSA, 0x60, 0, &c->stx);
+        bus(e, TD_TALK, c->fa, 0, &c->stx);
+        bus(e, TD_TKSA, 0x60, 0, &c->stx);
         {
             uint8_t s0 = 0, s1 = 0;
-            bus(e, VD_ACPTR, 0, &c->b0, &s0);
+            bus(e, TD_ACPTR, 0, &c->b0, &s0);
             if (s0 & 0x02) {                            /* nothing came: FILE NOT FOUND */
-                bus(e, VD_UNTLK, 0, 0, 0);
-                bus(e, VD_LISTEN, c->fa, 0, 0); bus(e, VD_SECOND, 0xE0, 0, 0); bus(e, VD_UNLSN, 0, 0, 0);
+                bus(e, TD_UNTLK, 0, 0, 0);
+                bus(e, TD_LISTEN, c->fa, 0, 0); bus(e, TD_SECOND, 0xE0, 0, 0); bus(e, TD_UNLSN, 0, 0, 0);
                 ERROR(4);
             }
             c->eoi = (s0 & 0x40) != 0;
             c->b1 = 0;
-            if (!c->eoi) { bus(e, VD_ACPTR, 0, &c->b1, &s1); c->eoi = (s1 & 0x40) != 0; }
+            if (!c->eoi) { bus(e, TD_ACPTR, 0, &c->b1, &s1); c->eoi = (s1 & 0x40) != 0; }
         }
         c->addr = c->sa ? (uint16_t)(c->b0 | c->b1 << 8) : c->cadr;   /* SA 0: the caller's address */
         {
@@ -427,7 +427,7 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
             c->n = 0;
             while (c->n < c->chunk && !c->eoi) {
                 uint8_t s = 0, d = 0;
-                bus(e, VD_ACPTR, 0, &d, &s);
+                bus(e, TD_ACPTR, 0, &d, &s);
                 if (s & 0x02) { c->eoi = 1; c->stx |= 0x02; break; }   /* a read error (bad sector): the load ends here, ST $42 */
                 c->data[c->n++] = d;
                 if (s & 0x40) c->eoi = 1;
@@ -447,8 +447,8 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
             }
             c->addr = (uint16_t)(c->addr + c->n);
         }
-        bus(e, VD_UNTLK, 0, 0, 0);
-        bus(e, VD_LISTEN, c->fa, 0, 0); bus(e, VD_SECOND, 0xE0, 0, 0); bus(e, VD_UNLSN, 0, 0, 0);
+        bus(e, TD_UNTLK, 0, 0, 0);
+        bus(e, TD_LISTEN, c->fa, 0, 0); bus(e, TD_SECOND, 0xE0, 0, 0); bus(e, TD_UNLSN, 0, 0, 0);
         {
             uint8_t z[2] = { (uint8_t)c->addr, (uint8_t)(c->addr >> 8) };
             sc_poke(e, 0xAE, z, 2);
@@ -463,28 +463,28 @@ VD_COLD static int vv_run(vvec_t *e, vv_ctx_t *c)
         MMU_READ();
         sc_poke1(e, 0xB9, 0x61);
         c->stx = 0;
-        bus(e, VD_LISTEN, c->fa, 0, &c->stx);
-        bus(e, VD_SECOND, 0xF1, 0, &c->stx);
-        if (c->stx & 0x80) { bus(e, VD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, 0x80); ERROR(5); }
+        bus(e, TD_LISTEN, c->fa, 0, &c->stx);
+        bus(e, TD_SECOND, 0xF1, 0, &c->stx);
+        if (c->stx & 0x80) { bus(e, TD_UNLSN, 0, 0, 0); sc_poke1(e, 0x90, 0x80); ERROR(5); }
         for (c->i = 0; c->i < c->fnlen; c->i = (uint16_t)(c->i + c->n)) {
             c->n = (uint8_t)(c->fnlen - c->i > VV_CHUNK ? VV_CHUNK : c->fnlen - c->i);
             BPEEK(c->fnbank, (uint16_t)(c->fnadr + c->i), c->n);
-            for (int j = 0; j < c->n; j++) bus(e, VD_CIOUT, c->buf[j], 0, 0);
+            for (int j = 0; j < c->n; j++) bus(e, TD_CIOUT, c->buf[j], 0, 0);
         }
-        bus(e, VD_UNLSN, 0, 0, 0);
+        bus(e, TD_UNLSN, 0, 0, 0);
         CALL(KN->saving, 0, 0, 0);
-        bus(e, VD_LISTEN, c->fa, 0, 0);
-        bus(e, VD_SECOND, 0x61, 0, 0);
-        bus(e, VD_CIOUT, (uint8_t)c->addr, 0, 0);
-        bus(e, VD_CIOUT, (uint8_t)(c->addr >> 8), 0, 0);
+        bus(e, TD_LISTEN, c->fa, 0, 0);
+        bus(e, TD_SECOND, 0x61, 0, 0);
+        bus(e, TD_CIOUT, (uint8_t)c->addr, 0, 0);
+        bus(e, TD_CIOUT, (uint8_t)(c->addr >> 8), 0, 0);
         while (c->addr < c->end) {
             c->n = (uint8_t)(c->end - c->addr > VV_CHUNK ? VV_CHUNK : c->end - c->addr);
             BPEEK(c->ba, c->addr, c->n);
-            for (int j = 0; j < c->n; j++) bus(e, VD_CIOUT, c->buf[j], 0, 0);
+            for (int j = 0; j < c->n; j++) bus(e, TD_CIOUT, c->buf[j], 0, 0);
             c->addr = (uint16_t)(c->addr + c->n);
         }
-        bus(e, VD_UNLSN, 0, 0, 0);
-        bus(e, VD_LISTEN, c->fa, 0, 0); bus(e, VD_SECOND, 0xE1, 0, 0); bus(e, VD_UNLSN, 0, 0, 0);
+        bus(e, TD_UNLSN, 0, 0, 0);
+        bus(e, TD_LISTEN, c->fa, 0, 0); bus(e, TD_SECOND, 0xE1, 0, 0); bus(e, TD_UNLSN, 0, 0, 0);
         sc_ret(e, c, c->a, c->x, c->y, 0);
         DONE(c);
     }

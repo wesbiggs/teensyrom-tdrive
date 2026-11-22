@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The mailbox gate (vd_here, called by vcall in patches/tdrive.s) in a 6502 simulator (py65; skipped when it is not installed).
+"""The mailbox gate (td_here, called by vcall in patches/tdrive.s) in a 6502 simulator (py65; skipped when it is not installed).
 
 A KERNAL in a ROM socket (a MEGA65's C64 core, a burnt EPROM) runs with no TDrive handler too: no TR, another Special IO, the TR
 menu's own handler. vcall then must not write the mailbox at all and hand every call straight to the real bus, not wait for its
-~1 s time-out. With the handler there, a late (bit-mixed) read of ID0 must not send a transaction to the real bus: vd_here tries
+~1 s time-out. With the handler there, a late (bit-mixed) read of ID0 must not send a transaction to the real bus: td_here tries
 4 times. Runs LISTEN ($ED0C, the hook) on a synthetic stock image as in test_reset_hook.py; reaching $F0A4 (stock LISTEN's
 ATN send) means the real bus."""
 import pathlib, subprocess, sys, tempfile
@@ -11,7 +11,7 @@ import pathlib, subprocess, sys, tempfile
 try:
     from py65.devices.mpu6502 import MPU
 except ImportError:
-    print("SKIP py65 not installed (pip install py65): vd_here not simulated"); sys.exit(0)
+    print("SKIP py65 not installed (pip install py65): td_here not simulated"); sys.exit(0)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 stock = bytearray(8192); stock[0xA31:0xA34] = bytes([0x20, 0xEA, 0xFF]); stock[0x1D9:0x1DB] = bytes([0xA2, 0x01]); stock[0x5EE:0x5F3] = bytes([0xA2, 0x09, 0x78, 0x86, 0xC6])
@@ -116,4 +116,4 @@ for regs in ({}, {ID0: 0x10, ID1: 0x03}):
 what, writes = fload(HERE)
 assert what == "mailbox" and (0xDE15, 4) in writes and (0xDF80, ord("N")) in writes and (ARG, 8) in writes, (what, writes)
 
-print("PASS vd_here: mailbox with the handler / real bus at once without it (also under the TR menu) / late ID reads / fast LOAD open")
+print("PASS td_here: mailbox with the handler / real bus at once without it (also under the TR menu) / late ID reads / fast LOAD open")

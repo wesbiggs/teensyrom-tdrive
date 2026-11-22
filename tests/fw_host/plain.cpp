@@ -38,7 +38,7 @@ int main(int argc, char **argv)
     IO1[rWRegCurrMenuWAIT] = rmtSD;
 
     check("plain TR: the agent is the TDrive handler, named \"TDrive\"", strcmp(IOHndlr_TDriveAgent.Name, "TDrive") == 0
-          && VD_IsHandler(IOH_TDriveAgent) && !VD_IsHandler(IOH_TDrive));
+          && TD_IsHandler(IOH_TDriveAgent) && !TD_IsHandler(IOH_TDrive));
     check("plain TR: remap leaves every handler alone", TDriveSwift_Remap(IOH_Swiftlink) == IOH_Swiftlink && TDriveSwift_Remap(IOH_TDriveAgent) == IOH_TDriveAgent);
     check("PreStart is not the agent's for another handler", !TDrive_AgentPreStart(IOH_Swiftlink));
     check("PreStart for the agent: the drive's PreStart runs", TDrive_AgentPreStart(IOH_TDriveAgent) && vio && vioReady && vio->vd.unit[0].present);
@@ -46,26 +46,26 @@ int main(int argc, char **argv)
     InitHndlr_TDriveAgent();
 
     bool same = true;
-    for (unsigned i = 0; i < sizeof VD_Agent; i++) same = same && rd1((uint8_t)(VD_AgentOfs + i)) == VD_Agent[i];
+    for (unsigned i = 0; i < sizeof TD_Agent; i++) same = same && rd1((uint8_t)(TD_AgentOfs + i)) == TD_Agent[i];
     check("IO1 $DE08..: the agent's bytes", same);
     check("IO1 $DE00-$DE07: open bus (a SwiftLink ACIA's place)", rd1(0x00) == 0x77 && rd1(0x07) == 0x77);
     wr1(0x80, 0x5C);
     check("IO1: the 6502's writes into the agent stay (its self-patched operands)", rd1(0x80) == 0x5C);
     InitHndlr_TDriveAgent();
-    check("... and a new launch serves a fresh copy", rd1(0x80) == VD_Agent[0x80 - VD_AgentOfs]);
+    check("... and a new launch serves a fresh copy", rd1(0x80) == TD_Agent[0x80 - TD_AgentOfs]);
 
-    check("IO2 $DF09/$DF0A: the ID the menu's loader checks before calling INSTALL", rd2(VD_AgentRegs + VIO_ID0) == VIO_ID0_VAL && rd2(VD_AgentRegs + VIO_ID1) == VIO_ID1_VAL);
-    check("IO2 $DF0B-$DF7F: open bus", rd2(VD_AgentRegs + VIO_NREGS) == 0x77 && rd2(0x7F) == 0x77);
-    check("IO2 $DF06: DEV0 (the SD unit, automatic: 8 until the first scan)", rd2(VD_AgentRegs + VIO_DEV0) == 8);
+    check("IO2 $DF09/$DF0A: the ID the menu's loader checks before calling INSTALL", rd2(TD_AgentRegs + VIO_ID0) == VIO_ID0_VAL && rd2(TD_AgentRegs + VIO_ID1) == VIO_ID1_VAL);
+    check("IO2 $DF0B-$DF7F: open bus", rd2(TD_AgentRegs + VIO_NREGS) == 0x77 && rd2(0x7F) == 0x77);
+    check("IO2 $DF06: DEV0 (the SD unit, automatic: 8 until the first scan)", rd2(TD_AgentRegs + VIO_DEV0) == 8);
 
     // an INSTALL frame (entry 0) as the agent writes it: Y X A P, the return address low byte, ST, open files, DFLTN, DFLTO
-    const uint8_t frame[] = { 0, 0, 0, 0x20, (uint8_t)(VD_AgentBase + 12 + 2), 0, 0, 0, 3 };
+    const uint8_t frame[] = { 0, 0, 0, 0x20, (uint8_t)(TD_AgentBase + 12 + 2), 0, 0, 0, 3 };
     for (unsigned i = 0; i < sizeof frame; i++) wr2((uint8_t)(VIO_WIN_OFS + i), frame[i]);
-    wr2(VD_AgentRegs + VIO_CMD, VV_C_VEC);
-    check("CMD: BUSY at once", rd2(VD_AgentRegs + VIO_STAT) == VIO_BUSY);
+    wr2(TD_AgentRegs + VIO_CMD, VV_C_VEC);
+    check("CMD: BUSY at once", rd2(TD_AgentRegs + VIO_STAT) == VIO_BUSY);
     PollingHndlr_TDriveAgent();
     check("after a poll: OK, and the answer starts with PEEK $FFD5 (INSTALL first reads the jump table's LOAD: which KERNAL)",
-          rd2(VD_AgentRegs + VIO_STAT) == VIO_OK && rd2(VIO_WIN_OFS + 0) == VV_OP_PEEK && rd2(VIO_WIN_OFS + 1) == 0xD5 && rd2(VIO_WIN_OFS + 2) == 0xFF
+          rd2(TD_AgentRegs + VIO_STAT) == VIO_OK && rd2(VIO_WIN_OFS + 0) == VV_OP_PEEK && rd2(VIO_WIN_OFS + 1) == 0xD5 && rd2(VIO_WIN_OFS + 2) == 0xFF
           && rd2(VIO_WIN_OFS + 3) == 3);
 
     // a launch into C128 mode (upstream's C128Prg.ino calls TDrive_C128Launch, docs/DESIGN.md 55)

@@ -3,7 +3,7 @@
 ; the scan runs. (A separate file since the first plain-TR build shared it, DESIGN.md 52; the agent does its scan in C.)
 
 ; in: command in A, argument in $A7 (written to MBX_ARG here, after the check).
-; Preserves X, Y. Nothing is written to the mailbox unless the ID register reads right (vd_here): without a TDrive handler
+; Preserves X, Y. Nothing is written to the mailbox unless the ID register reads right (td_here): without a TDrive handler
 ; (no TR, another Special IO, the TR menu's own handler; a KERNAL in a ROM socket sees all of them) every call goes to the
 ; real bus at once. That matters beyond speed: under the TR menu's handler $DE11 (ARG) and $DE15 (LEN) are EEPROM-backed
 ; settings (MIDI, timezone) that a write would change. Then it waits up to ~1 s for the Teensy; a mailbox that never answers
@@ -11,7 +11,7 @@
 ; out: C=0 handled, A=DATA (Z set from it), $90 updated; C=1 not mine, A=original argument.
 vcall:
         pha                     ; the command: sent again after a bus scan
-        jsr vd_here
+        jsr td_here
         bne @no
 @send:  lda $A7
         sta MBX_ARG

@@ -29,7 +29,7 @@ stcIOHandlers IOHndlr_TDriveSwift =
 FLASHMEM uint8_t TDriveSwift_Remap(uint8_t ioh)
 {
    uint8_t pref = EEPROM.read(eepAdNextIOHndlr);
-   if (!VD_IsHandler(pref)) return ioh;
+   if (!TD_IsHandler(pref)) return ioh;
    if (ioh == IOH_TDrive) return pref;                       // a TDrive program (TDrive Config) keeps the default's REU / SwiftLink
    if (pref == IOH_TDriveAgent) return ioh;                  // the agent has no combined handlers (yet): REU / SwiftLink programs get theirs
 #ifdef Fab04_REU
@@ -47,7 +47,7 @@ FLASHMEM void InitHndlr_TDriveSwift()
 
 FASTRUN void IO1Hndlr_TDriveSwift(uint8_t Address, bool R_Wn)
 {
-   if (Address < VD_MboxBase) IO1Hndlr_SwiftLink(Address, R_Wn);
+   if (Address < TD_MboxBase) IO1Hndlr_SwiftLink(Address, R_Wn);
    else IO1Hndlr_TDrive(Address, R_Wn);
 }
 

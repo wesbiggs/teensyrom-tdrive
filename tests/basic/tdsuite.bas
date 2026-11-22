@@ -217,7 +217,7 @@
 9090 input"return for menu";z$:goto 100
 9500 rem mc = the jump table of the machine code after this program (tests/asm/suite.s), 0 if missing
 9510 mc=peek(45)+256*peek(46)-12:if peek(65533)<>252 then mc=0:print"c64 only":return
-9520 if peek(mc-2)<>86 or peek(mc-1)<>68 then mc=0:print"machine code missing: load tdsuite again"
+9520 if peek(mc-2)<>84 or peek(mc-1)<>68 then mc=0:print"machine code missing: load tdsuite again"
 9530 return
 10000 rem bus stress (bustest): mailbox registers and window at full speed, no commands; about a minute
 10010 gosub 9500:if mc=0 then 400

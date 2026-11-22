@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The KERNAL patch on every ROM the firmware's whitelist accepts (VD_KnownKernals in firmware/IOH_TDrive.c), in VICE.
+"""The KERNAL patch on every ROM the firmware's whitelist accepts (TD_KnownKernals in firmware/IOH_TDrive.c), in VICE.
 
 usage: variants_vice.py STOCK.bin   the other ROMs are looked up next to it: VICE ships them in its C64 and C128 data folders.
 
@@ -15,7 +15,7 @@ roms = {"901227-03": "C64/kernal-901227-03.bin", "901227-02": "C64/kernal-901227
 
 glue = (ROOT / "firmware/IOH_TDrive.c").read_text()
 known = {name: int(crc, 16) for crc, name in re.findall(r'\{ 0x([0-9a-f]{8}), "([^"]+)" \}', glue)}
-assert set(known) == set(roms), "VD_KnownKernals and this list must name the same ROMs: %r" % sorted(set(known) ^ set(roms))
+assert set(known) == set(roms), "TD_KnownKernals and this list must name the same ROMs: %r" % sorted(set(known) ^ set(roms))
 
 ok = True
 with tempfile.TemporaryDirectory() as t:
