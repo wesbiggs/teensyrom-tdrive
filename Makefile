@@ -59,7 +59,7 @@ test-devcfg:
 test-fw:
 	python3 -I tests/fw_host/run.py $(STOCK)   # with the stock ROM: the firmware's in-memory patch == kernal-tr.bin
 
-test-tdconfig:   # TDrive Config.prg (util/tdconfig.s) in py65 with its KERNAL calls answered by a drive model (skipped without py65)
+test-tdconfig:   # TDrive Config.prg (util/tdconfig.asm) in py65 with its KERNAL calls answered by a drive model (skipped without py65)
 	python3 -I tests/test_tdconfig.py
 
 test-tdcopy: build/libd64.dylib   # TDCOPY (util/tdcopy.s) in py65 against the real drive code on both units: whole-disk and file copies (skipped without py65)

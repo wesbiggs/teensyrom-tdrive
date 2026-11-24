@@ -1458,3 +1458,51 @@ which plays the real 1541 there): a real drive at 8 (the SD unit becomes 9, `TDR
 the drive at 8), an empty bus (SD stays 8), and no handler (`layout=None`: no unit shown, no IO write). The 0.9.0.73 PRG fails all three.
 **Not on hardware**, and not in VICE under the agent (`make test-agent` does not run TDCOPY).
 
+## 66. Review fixes from the TeensyROM tree; TDrive Config's source moves to ACME (0.9.0.78; host tests; not on hardware)
+
+A code review of the patched tree (the fork's `tdrive` branch, 0.9.0.73) on the fork's `tdrive-panel` branch found four firmware
+bugs, added host tests that run in the tree's `npm test` and documented the remote commands. All of it is carried by the patch now.
+
+- **Only image files mount** (`TD_MountHost`, `TD_CheckImage` in `firmware/IOH_TDrive.c`). The engine takes the format from the size
+  alone, so a remote set, an Alt-button list entry or a remembered `/.tdrive` naming any file of 174848 bytes or more mounted it:
+  a 1 MB `.crt` became a writable D81 and a `SAVE` or `N:` wrote into it. The C64-side paths already wanted an image name; the mount
+  itself and the remote check now apply the same `image_kind` test, before the current disk is unmounted (74 / "not a disk image").
+- **A fast LOAD or SAVE stays on its unit** (`tdrive_select` in `d64/tdrive.c`; `fl_unit` / `fs_unit` in `tdrive_io.c`). The open
+  transfer addressed the unit by the device number it was opened with; a `U0>` or a bus scan meanwhile moved that number. The save's
+  close then looked the unit up as -1 (reading before the unit table), left channel 1 open and the file unfinished; the load's blocks
+  reached nobody and came back empty without an end. `tdrive_select` is the LISTEN/TALK half of `tdrive_mailbox` by unit index.
+- **Fast VERIFY stops measuring once a file cannot fit** (`fverify_open`). It read a whole file to learn its length before comparing
+  it with what a DMA read reaches; with nothing mounted a card file has any size, and the read ran inside one mailbox command (a 4 MB
+  file: 4 MB with the main loop waiting). The count stops past `$D000 - start`, and the start is checked first.
+- **An immediate REU command disarms the `$FF00` trigger under TDrive+REU and TDrive+Swift+REU** (`IO2Hndlr_TDriveREU`). The plain
+  REU drops an armed trigger on an immediate command only when it finds its own hook in `fBusSnoop`; under the TDrive handlers the
+  armed hook is `TDREU_Snoop` (32, 34), so the trigger survived and the next store to `$FF00` ran a second, unrequested transfer.
+  While armed, `IO2Hndlr_REU` is now shown its own hook, so its own logic decides, and register reads go straight through.
+
+The tests: `firmware/tr-tests/` (copied into the tree's `Source/Teensy/tests/`: `tdrive.test.js` for the open-spec parsing, LOAD,
+scratch and aliases, `tdrive-io.test.js` for the fast paths, `tdrive-mount.test.js`, `tdrive-reu.test.js`, each with its harness over
+the tree's own sources). Here, `tests/test_vio.py` also moves the number under an open fast LOAD and SAVE. The tree's docs get the
+remote get / set commands (`docs/ControlComms.md`, from `firmware/tr-docs/ControlComms-tdrive.md`, and two paragraphs in
+`tools/tr_docs.py`), and `Disk-Images.md` says TDrive already uses the shared write-back policy (55).
+
+**TDrive Config in ACME.** The review ported `util/vdconfig.s` (ca65, as of 0.9.0.73; `util/tdconfig.s` after the 0.9.0.75 rename) to ACME, the assembler of every other menu
+program, as `Source/C64/TDriveConfig/tdconfig.asm`, a project in the tree's `tools/c64-projects.json`, so the tree's own tests check
+`tdconfig.prg.h` against a source (before, the header was a binary made here). It also renamed the program's files and array to
+`tdconfig` and the prompt to "Color 0-15:". 0.9.0.74 (64) had changed the ca65 source after the port, so the two were reconciled by
+making the ACME file the only source: `util/tdconfig.asm`, assembled by `tools/make_util.py` for the tests and the test disk and
+copied unchanged by `make_tr_patch.sh`, whose `build-c64.mjs` run now also builds `TDriveConfig`. 0.9.0.74's changes were carried into
+it; ca65's `MREG` macro, which collected the operand table in a segment of its own, becomes `+mr ~name` in front of each instruction
+(ACME has no segments: the macro defines `name` as the operand's address and counts the uses) and an `MRTAB` written out in source
+order at the end, which an `!if` checks against the count. The result assembles to the same 6281 bytes as ca65 from 0.9.0.74's
+source with the one prompt changed. `make util`, `make test-tdconfig` and `make testdisk` now need ACME 0.97.
+
+Verified: the patch applied to a pristine `tdrive-base` tree differs from `tdrive-panel` only by 0.9.0.74, the repository name in
+comments, the version and the source location named in the manifest and the C64 docs; the tree's `npm test` (500) passes on it, the
+new TDrive tests included; the header in the tree holds the PRG this repository builds. **Not on hardware.**
+
+The work was written on top of 0.9.0.74 and numbered 0.9.0.75; `main` meanwhile used 0.9.0.75 for the vd -> td rename, so it was
+carried over onto that rename (every `vd`/`VD` name in it to `td`/`TD`, `VD_COLD` kept; the ca65 file it replaces is `util/tdconfig.s`)
+as 0.9.0.76, then renumbered 0.9.0.77 when `main` used 0.9.0.76 for the DMA store-order fix (62), and 0.9.0.78 when `main`
+used 0.9.0.77 for the move to upstream's `CloseDMA()` (62). Checked again after the 0.9.0.77 renumbering: the patch from a pristine `tdrive-base` tree applies, the tree's `npm test` passes (500, the 27
+TDrive tests included), `tdconfig.prg.h` holds the 6281-byte PRG built here, the TR+ firmware builds (`TeensyROM+_0.9.0.1.77_full.hex`),
+and `make test` passes.

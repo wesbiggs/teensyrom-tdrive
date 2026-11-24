@@ -29,7 +29,7 @@ def main():
     assert prg[:2] == bytes([BASE & 0xFF, BASE >> 8])
     code = prg[2:]
     assert BASE + len(code) <= 0xDF00, "the agent must end inside IO1"
-    # TDrive Config (util/tdconfig.s, findmb) and the KERNAL's gate tell the two register layouts by the ID bytes $D6 $64 at $DE19/$DE1A
+    # TDrive Config (util/tdconfig.asm, findmb) and the KERNAL's gate tell the two register layouts by the ID bytes $D6 $64 at $DE19/$DE1A
     # (the KERNAL build) or $DF09/$DF0A (this one): the agent's own bytes at $DE19/$DE1A must not read as the KERNAL build's IDs
     assert code[0xDE19 - BASE:0xDE1B - BASE] != bytes([0xD6, 0x64]), "the agent's code reads as the KERNAL build's ID bytes at $DE19"
     rows = ",\n".join("   " + ", ".join("0x%02x" % b for b in code[i:i + 16]) for i in range(0, len(code), 16))

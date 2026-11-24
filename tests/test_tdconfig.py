@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TDrive Config.prg (util/tdconfig.s, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against a model of the drive.
+"""TDrive Config.prg (util/tdconfig.asm, machine code) run in py65 (tests/c64_sim.py answers its KERNAL calls) against a model of the drive.
 
 The model follows d64/tdrive.c and firmware/IOH_TDrive.c: "!CONFIG[,W]" / "!STATE" host text files, "$path" listings by path (they do not change
 what is mounted), "CD:" with paths, the error channel, and the rule that closing channel 15 closes every channel of the unit. The real channel
@@ -342,7 +342,7 @@ class T(unittest.TestCase):
         self.keys(*([DOWN] * (sub + 1)), RET)            # into GAMES/SUB
         self.assertEqual(self.row(3), "Browse: /games/sub")
         self.keys(DOWN, RET)                             # DEEP.D64
-        self.assertEqual(self.row(23).startswith("Colour 0-15: 1"), True, self.row(23))
+        self.assertEqual(self.row(23).startswith("Color 0-15: 1"), True, self.row(23))
         self.keys(DEL, "1", "2", RET)
         self.assertTrue(self.row(23).startswith("Flashes 0-20: 1"), self.row(23))
         self.keys(DEL, "4", RET)
@@ -418,7 +418,7 @@ class T(unittest.TestCase):
         self.assertTrue(self.row(23).startswith("Path(?=browse): /games/zork.d64"), self.row(23))
         for _ in range(len("zork.d64")): self.keys(DEL)
         self.keys(*"ZORK2.D64", RET)
-        self.assertTrue(self.row(23).startswith("Colour 0-15: 5"))
+        self.assertTrue(self.row(23).startswith("Color 0-15: 5"))
         self.keys(DEL, "9", RET)
         self.keys(DEL, "0", RET)                         # 0 flashes = silent but valid
         self.assertEqual(self.config().split("\n")[1], "/games/zork2.d64, 9, 0")

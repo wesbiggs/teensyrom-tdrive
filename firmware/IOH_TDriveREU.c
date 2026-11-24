@@ -51,12 +51,15 @@ FASTRUN void IO2Hndlr_TDriveREU(uint8_t Address, bool R_Wn)
       IO2Hndlr_TDrive(Address, R_Wn);
       return;
    }
+   if (R_Wn) { IO2Hndlr_REU(Address, R_Wn); return; }   // a read never arms or clears the trigger
    bool (*Prev)(uint16_t, bool) = fBusSnoop;
+   // while armed, IO2Hndlr_REU is shown its own hook, so a write that leaves the trigger alone or re-arms it hands REU_FF00_W_Check
+   // back and stays armed below; shown TDREU_Snoop, every register write while armed would drop the trigger
+   if (Prev == &TDREU_Snoop) fBusSnoop = &REU_FF00_W_Check;
+   else tdReuBase = Prev;                             // not armed: what to go back to
    IO2Hndlr_REU(Address, R_Wn);
-   if (fBusSnoop == Prev) return;                     // the usual case: a register read or write that started nothing
-   if (Prev != &TDREU_Snoop) tdReuBase = Prev;        // not armed before: remember what to go back to
    fBusSnoop = (fBusSnoop == &REU_FF00_W_Check) ? &TDREU_Snoop   // armed: watch for $FF00, keep serving the KERNAL meanwhile
-                                                 : tdReuBase;    // cleared (immediate start / re-armed without $FF00)
+                                                 : tdReuBase;    // not armed, or cleared by an immediate start
 }
 
 FLASHMEM void InitHndlr_TDriveREU()

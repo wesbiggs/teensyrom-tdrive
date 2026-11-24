@@ -367,6 +367,31 @@ class VioTests(unittest.TestCase):
         self.assertEqual(self.disk.free(), free)
         self.valid()
 
+    def test_fast_save_stays_on_its_unit_when_the_number_moves(self):
+        # a U0> or a bus scan between the open and the close: the save used to close device 8, which no unit answered any more
+        # (channel 1 left open, the file unfinished); it is addressed by its unit now (tdrive_select)
+        body = self.data(600)
+        self.io.win_write(b"MOVED"); self.assertEqual(self.io.call(F_SAVE_OPEN, 8, 5)[1], 0)
+        self.io.win_write(b"\x01\x08"); self.io.call(F_SAVE_BLK, 0, 2)
+        self.io.set_devices(10, 0)
+        for i in range(0, len(body), WIN_SIZE):
+            part = body[i:i + WIN_SIZE]; self.io.win_write(part); self.io.call(F_SAVE_BLK, 0, len(part))
+        self.assertEqual(self.io.call(F_SAVE_CLOSE)[1], 0)
+        self.assertEqual(self.io.fast_load(10, b"MOVED"), (0, 0x0801, body))
+        self.valid()
+
+    def test_fast_load_stays_on_its_unit_when_the_number_moves(self):
+        # the blocks used to talk to device 8 after the move and came back empty without an end
+        self.io.win_write(b"BIG"); self.assertEqual(self.io.call(F_LOAD_OPEN, 8, 3)[1], 0)
+        self.io.set_devices(10, 0)
+        data = b""
+        for _ in range(200):
+            _, n, st = self.io.call(F_LOAD_BLK)
+            data += self.io.win_read(n)
+            if st & 0x40: break
+        self.assertTrue(st & 0x40, "the load never ended")
+        self.assertEqual(data, self.files[b"BIG"][2:])
+
     def test_fast_save_absent_and_foreign(self):
         self.assertEqual(self.io.fast_save(9, b"A", 0x0801, b"x"), 5)
         self.assertEqual(self.io.fast_save(12, b"A", 0x0801, b"x"), "notmine")

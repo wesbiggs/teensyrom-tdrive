@@ -1,3 +1,8 @@
+; TDrive Config (ACME 0.97). The one source: teensyrom-tdrive's tools/make_util.py assembles it for the tests and the test disk, and
+; tools/make_tr_patch.sh copies it unchanged into the TeensyROM tree (Source/C64/TDriveConfig/tdconfig.asm), whose tools/build-c64.mjs
+; builds the menu's tdconfig.prg.h from it. Until 0.9.0.77 it was util/tdconfig.s (ca65; util/vdconfig.s before 0.9.0.75); this port assembled to the same bytes.
+; The ca65 macros are expanded at each use: PS is "jsr pstr" and a !pet line ending in 0, MSG wraps that in msgbeg/fpad, KEYS prints
+; each key as 18, C_OPT, key, 146, C_SRC, text, and CMDS is cmdbeg plus pstr with a !tx string. MREG stays a macro (+mr, below).
 ; TDrive Config: edit the Alt-button disk lists (/tdrive-config.txt on each unit) and show / change the mounted images, entirely in machine code.
 ; Loads at $0801 with a BASIC "10 SYS 2061" stub. Talks to the drives only through the KERNAL: the "!CONFIG[,W]" and "!STATE" host text
 ; channels (docs/DESIGN.md 23), "$/folder/" listings for the browser and "CD:" on the command channel (logical file 15 for the SD unit, 14 for
@@ -5,17 +10,17 @@
 ; browser's block listings (FLOAD_OPEN / FLOAD_BLK), the return to the TR menu (VIO_MENU, on Q) and, under the agent, the bus scan.
 ; Two register layouts (findmb): the TR+ KERNAL build's at IO1 $DE10, the TDrive agent's (plain TR; "TDrive Agent" on the TR+) at IO2
 ; $DF00, where IO1 holds the agent's code. Each is told by its ID bytes; the code is assembled for $DE10 and every register operand
-; is pointed at the one found (MREG, the MRTAB table) before the first access. Nothing is written to either without the IDs.
+; is pointed at the one found (+mr, the MRTAB table) before the first access. Nothing is written to either without the IDs.
 ; The file is kept as text in TXT (each line ends in CR) with an index of its lines; every change rebuilds the text in NEWB (one line replaced,
 ; removed, swapped or added), copies it back, re-indexes and re-parses the entries, then writes the whole file. Lines that are not entries
 ; (comments, blank lines) stay where they are.
-; Buffers and tables are BSS at $2200-$51FF (not in the PRG). The screen is in the lower-case character set: PS swaps the case of the
-; letters in its strings for that set, strings for the drive (CMDS, types) are as they are.
-; Colours follow the TR menu: its seven colour references (background, border, banner, time, option, sources, name) come as the third
+; Buffers and tables are BSS at $2200-$51FF (not in the PRG). The screen is in the lower-case character set: !pet swaps the case of the
+; letters in its strings for that set, strings for the drive (!tx: CMDS, types) are as they are.
+; Colors follow the TR menu: its seven color references (background, border, banner, time, option, sources, name) come as the third
 ; line of "!STATE" (hex digits; the menu's defaults when a firmware sends no such line). Bytes C_BAN..C_NAME in a screen string select
-; one (fch sets the text colour from THEME). As in the menu: a reverse banner, keys in reverse in the option colour, their descriptions and
-; labels in the sources colour, paths and names in the name colour, messages in the time colour.
-.setcpu "6502"
+; one (fch sets the text color from THEME). As in the menu: a reverse banner, keys in reverse in the option color, their descriptions and
+; labels in the sources color, paths and names in the name color, messages in the time color.
+!cpu 6502
 
 SETLFS  = $FFBA
 SETNAM  = $FFBD
@@ -32,173 +37,100 @@ LISTEN  = $FFB1
 SECOND  = $FF93
 UNLSN   = $FFAE
 STATUS  = $90
-QTSW    = $D4           ; quote mode of the screen editor: a '"' in a path must not turn the control codes after it into characters
-INSRT   = $D8           ; insert count, likewise
+QTSW    = $D4                   ; quote mode of the screen editor: a '"' in a path must not turn the control codes after it into characters
+INSRT   = $D8                   ; insert count, likewise
 BORDER  = $D020
 BGCOL   = $D021
 TXTCOL  = $0286
-MBXK    = $DE10         ; tdrive mailbox (d64/tdrive_io.h) of the KERNAL build; the agent's is MBXA. Operands assembled for MBXK go
-MBXA    = $DF00         ;   through MREG, which records them for findmb
-MBXCMD  = MBXK+0        ; command register ...
-MBXARG  = MBXK+1        ; argument (the device for the fast open, a free number for VIO_FREE)
-MBXDATA = MBXK+2        ; result byte (the fast open's error, a block's byte count)
-MBXSTAT = MBXK+3        ; ... and its answer token
-MBXST   = MBXK+4        ; IEC status bits of the answer ($40 EOI: the last block)
-MBXLEN  = MBXK+5        ; name length for the fast open
-DEV0REG = MBXK+6        ; current device number of the SD unit, +7 the USB unit (0 = none)
-MBXID0  = 9             ; ID registers (offsets): $D6 $64 while a TDrive handler answers
+MBXK    = $DE10                 ; tdrive mailbox (d64/tdrive_io.h) of the KERNAL build; the agent's is MBXA. Operands assembled for MBXK
+MBXA    = $DF00                 ;   carry +mr, which records them for findmb
+MBXCMD  = MBXK+0                ; command register ...
+MBXARG  = MBXK+1                ; argument (the device for the fast open, a free number for VIO_FREE)
+MBXDATA = MBXK+2                ; result byte (the fast open's error, a block's byte count)
+MBXSTAT = MBXK+3                ; ... and its answer token
+MBXST   = MBXK+4                ; IEC status bits of the answer ($40 EOI: the last block)
+MBXLEN  = MBXK+5                ; name length for the fast open
+DEV0REG = MBXK+6                ; current device number of the SD unit, +7 the USB unit (0 = none)
+MBXID0  = 9                     ; ID registers (offsets): $D6 $64 while a TDrive handler answers
 MBXID1  = 10
-WIN     = $DF80         ; the 128-byte IO2 window: the name out, the blocks in
+WIN     = $DF80                 ; the 128-byte IO2 window: the name out, the blocks in
 WINSZ   = 128
-C_FLOPEN = 9            ; FLOAD_OPEN / FLOAD_BLK: the fast LOAD's block transfer (d64/tdrive_io.h), used for the browser's listings
+C_FLOPEN = 9                    ; FLOAD_OPEN / FLOAD_BLK: the fast LOAD's block transfer (d64/tdrive_io.h), used for the browser's listings
 C_FLBLK = 10
 STAT_NOTMINE = $A5
 STAT_SCAN = $3C
-VIO_MENU = 16           ; command: back to the TR menu (the Teensy resets the C64 into it)
-VIO_SCAN = 14           ; command: the bus scan starts (the automatic units let go of their numbers); DATA = units that need one
-VIO_FREE = 15           ; command: nobody answered at ARG; DATA = units still waiting
-STAT_OK = $5A           ; answer token: done
+VIO_MENU = 16                   ; command: back to the TR menu (the Teensy resets the C64 into it)
+VIO_SCAN = 14                   ; command: the bus scan starts (the automatic units let go of their numbers); DATA = units that need one
+VIO_FREE = 15                   ; command: nobody answered at ARG; DATA = units still waiting
+STAT_OK = $5A                   ; answer token: done
 
-P1      = $FB           ; inline strings
-P2      = $FD           ; the string being printed, parsed or compared
-P3      = $22           ; write pointer; $22-$25 are BASIC's scratch pointers, unused while this runs
-P4      = $24           ; read pointer
+P1      = $FB                   ; inline strings
+P2      = $FD                   ; the string being printed, parsed or compared
+P3      = $22                   ; write pointer; $22-$25 are BASIC's scratch pointers, unused while this runs
+P4      = $24                   ; read pointer
 
-MAXL    = 119           ; lines kept from the file
-MAXE    = 32            ; list entries (what the firmware reads)
-MAXB    = 100           ; browser entries
-SAVEMAX = 2000          ; bytes of the file the firmware reads
-VR      = 16            ; list rows on the screen (rows 4-19)
-BPMAX   = 200           ; browser path
-CURSOR  = $A4           ; the line editor's cursor (an underscore)
-LARROW  = 95            ; left arrow: cancel; "CD:<-" unmounts
-OUTSCR  = 0             ; OUTM: where fch sends characters
+MAXL    = 119                   ; lines kept from the file
+MAXE    = 32                    ; list entries (what the firmware reads)
+MAXB    = 100                   ; browser entries
+SAVEMAX = 2000                  ; bytes of the file the firmware reads
+VR      = 16                    ; list rows on the screen (rows 4-19)
+BPMAX   = 200                   ; browser path
+CURSOR  = $A4                   ; the line editor's cursor (an underscore)
+LARROW  = 95                    ; left arrow: cancel; "CD:<-" unmounts
+OUTSCR  = 0                     ; OUTM: where fch sends characters
 OUTLINE = 1
 OUTCMD  = 2
-C_BAN   = 3             ; screen string bytes 1-7: colour reference 0-6 of the TR menu (THEME); only these five are used for text
+C_BAN   = 3                     ; screen string bytes 1-7: color reference 0-6 of the TR menu (THEME); only these five are used for text
 C_TIME  = 4
 C_OPT   = 5
 C_SRC   = 6
 C_NAME  = 7
 
-.macro LCB s          ; one string or byte for the lower-case screen: 'a'-'z' -> $41-$5A, 'A'-'Z' -> $C1-$DA, anything else as it is
-.if .match({s}, "")
-.repeat .strlen(s), I
-.if .strat(s, I) >= 'a' && .strat(s, I) <= 'z'
-        .byte .strat(s, I) - $20
-.elseif .strat(s, I) >= 'A' && .strat(s, I) <= 'Z'
-        .byte .strat(s, I) + $80
-.else
-        .byte .strat(s, I)
-.endif
-.endrepeat
-.else
-        .byte s
-.endif
-.endmacro
-.macro LC s1, s2, s3, s4, s5
-        LCB s1
-.ifnblank s2
-        LCB s2
-.endif
-.ifnblank s3
-        LCB s3
-.endif
-.ifnblank s4
-        LCB s4
-.endif
-.ifnblank s5
-        LCB s5
-.endif
-.endmacro
-.macro PS s1, s2, s3, s4, s5 ; print the strings / bytes (screen text: see LCB)
-        jsr pstr
-        LC s1, s2, s3, s4, s5
-        .byte 0
-.endmacro
-.macro MSG str          ; a message on row 20
-        jsr msgbeg
-        PS str
-        jsr fpad
-.endmacro
-.macro KEY k, t         ; a key as the TR menu shows it (reverse, option colour) and what it does (sources colour); inside pstr strings
-        .byte 18, C_OPT
-        LCB k
-        .byte 146, C_SRC
-        LCB t
-.endmacro
-.macro KEYS k1, t1, k2, t2, k3, t3, k4, t4 ; print up to four keys
-        jsr pstr
-        KEY k1, t1
-.ifnblank k2
-        KEY k2, t2
-.endif
-.ifnblank k3
-        KEY k3, t3
-.endif
-.ifnblank k4
-        KEY k4, t4
-.endif
-        .byte 0
-.endmacro
-.macro CMDS str         ; CMD = str (as it is: for the drive); fch appends to CMD until scr
-        jsr cmdbeg
-        jsr pstr
-        .byte str, 0
-.endmacro
+; +mr ~name in front of an instruction whose operand is a mailbox register (MBXK+n): name = the operand's address, which MRTAB at the
+; end must list with the register's offset (in the order of the source, as ca65's MRT segment had them). The count is checked there.
+!set mrt_n = 0
+!macro mr ~.at {
+        .at = * + 1
+        !set mrt_n = mrt_n + 1
+}
 
-.macro MREG op, reg, idx  ; op MBXK+reg (,idx); its operand goes into MRTAB (segment MRT), which findmb points at the registers found
-.ifblank idx
-:       op reg
-.else
-:       op reg, idx
-.endif
-        .pushseg
-        .segment "MRT"
-        .word :- + 1
-        .byte reg - MBXK
-        .popseg
-.endmacro
+* = $0801
+        !wo @next
+        !wo 10
+        !tx $9E, "2061", 0
+@next   !wo 0
 
-.segment "MRT"
-MRTAB:                  ; per MREG: the operand's address, the register's offset (no global labels in the macro: they would end the @ scopes)
-.segment "LOADADDR"
-        .word $0801
-.segment "BASIC"
-        .word @next
-        .word 10
-        .byte $9E, "2061", 0
-@next:  .word 0
-
-.segment "CODE"
-start:
-.assert start = 2061, error, "the SYS address in the BASIC stub must match"
+start
+!if start <> 2061 { !error "the SYS address in the BASIC stub must match" }
         jsr scr
-        PS 14, 8                ; the lower-case character set, and Shift+C= may not switch it back
-        PS "Reading config...", 13
+        jsr pstr                ; the lower-case character set, and Shift+C= may not switch it back
+        !pet 14, 8, 0
+        jsr pstr
+        !pet "Reading config...", 13, 0
         jsr findmb              ; which TDrive handler answers, if any
         bcs @no2
         bit AGENT
         bpl @nos
         jsr agscan              ; the agent's numbers are settled by a bus scan here (the TR+'s menu probes before the launch)
-@nos:   ldx #1
-@dv:    MREG lda, DEV0REG, x
+@nos    ldx #1
+@dv     +mr ~mr_dv : lda DEV0REG,x
         cmp #8
         bcc @no
         cmp #31
         bcc @ok
-@no:    lda #0
-@ok:    sta DEVS,x
+@no     lda #0
+@ok     sta DEVS,x
         dex
         bpl @dv
         lda DEVS
         ora DEVS+1
         bne @act
-@no2:   lda #255
+@no2    lda #255
         sta FLDN
-        PS "TDrive is not active.", 13, "Start this program from the TeensyROM menu with a TDrive Special IO.", 13
+        jsr pstr
+        !pet "TDrive is not active.", 13, "Start this program from the TeensyROM menu with a TDrive Special IO.", 13, 0
         rts
-@act:   lda BORDER
+@act    lda BORDER
         and #15
         sta OC
         lda BGCOL
@@ -213,18 +145,18 @@ start:
         lda #15
         ldy #15
         jsr openc
-@o1:    lda DEVS+1
+@o1     lda DEVS+1
         beq @o2
         tax
         lda #14
         ldy #15
         jsr openc
-@o2:    lda #0
+@o2     lda #0
         sta UN
         lda DEVS
         bne @u
         inc UN                  ; no SD unit: start on the USB list
-@u:     jsr setunit
+@u      jsr setunit
         jsr readstate
         lda THEME+1             ; the menu's border and background
         sta BORDER
@@ -235,60 +167,63 @@ start:
         sta CU
         sta TP
         jsr drawall
-        MSG "Ready. Alt: 1 tap = SD, 2 taps = USB"
-main:   jsr getkey
+        jsr msgbeg
+        jsr pstr
+        !pet "Ready. Alt: 1 tap = SD, 2 taps = USB", 0
+        jsr fpad
+main    jsr getkey
         cmp #'Q'
         beq quit
         ldx #NKEYS-1
-@f:     cmp keytab,x
+@f      cmp keytab,x
         beq @go
         dex
         bpl @f
         bmi main
-@go:    jsr @call
+@go     jsr @call
         jmp main
-@call:  lda keyhi,x
+@call   lda keyhi,x
         pha
         lda keylo,x
         pha
         rts
 
-keytab: .byte 145, 17, 13, 'B', 'U', 'A', 'E', 'D', '+', '-', 'T', 'R'
+keytab  !by 145, 17, 13, 'B', 'U', 'A', 'E', 'D', '+', '-', 'T', 'R'
 NKEYS = * - keytab
-keylo:  .lobytes k_up-1, k_down-1, k_ret-1, k_brow-1, k_unm-1, k_add-1, k_edit-1, k_del-1, k_plus-1, k_minus-1, k_tog-1, k_ref-1
-keyhi:  .hibytes k_up-1, k_down-1, k_ret-1, k_brow-1, k_unm-1, k_add-1, k_edit-1, k_del-1, k_plus-1, k_minus-1, k_tog-1, k_ref-1
+keylo   !by <(k_up-1), <(k_down-1), <(k_ret-1), <(k_brow-1), <(k_unm-1), <(k_add-1), <(k_edit-1), <(k_del-1), <(k_plus-1), <(k_minus-1), <(k_tog-1), <(k_ref-1)
+keyhi   !by >(k_up-1), >(k_down-1), >(k_ret-1), >(k_brow-1), >(k_unm-1), >(k_add-1), >(k_edit-1), >(k_del-1), >(k_plus-1), >(k_minus-1), >(k_tog-1), >(k_ref-1)
 
 ; Q: back to the TR menu. The Teensy answers the mailbox command, writes back what is unsaved and resets the C64 into its menu; if
 ; nothing answers (or no reset comes) this returns to BASIC instead.
-quit:   lda #15
+quit    lda #15
         jsr CLOSE
         lda #14
         jsr CLOSE
         jsr CLRCHN
         sei                     ; nothing from the KERNAL while the Teensy writes to the card
         lda #VIO_MENU
-        MREG sta, MBXCMD
+        +mr ~mr_q0 : sta MBXCMD
         ldx #0
         ldy #0
-@w:     MREG lda, MBXSTAT       ; BUSY until answered; read twice, as the KERNAL does (a late answer gives a mixed byte)
+@w      +mr ~mr_q1 : lda MBXSTAT ; BUSY until answered; read twice, as the KERNAL does (a late answer gives a mixed byte)
         cmp #STAT_OK
         bne @n
-        MREG cmp, MBXSTAT
+        +mr ~mr_q2 : cmp MBXSTAT
         beq @ok
-@n:     dex
+@n      dex
         bne @w
         dey
         bne @w
         beq @bas                ; not answered in about a second
-@ok:    lda #4                  ; answered: the reset comes within a few ms; give it about 4 s
+@ok     lda #4                  ; answered: the reset comes within a few ms; give it about 4 s
         sta T0
-@r:     dex
+@r      dex
         bne @r
         dey
         bne @r
         dec T0
         bne @r
-@bas:   cli
+@bas    cli
         lda OC
         sta BORDER
         lda OB
@@ -298,18 +233,18 @@ quit:   lda #15
         lda #255
         sta FLDN
         jsr pstr
-        .byte 147, 142, 9, 154, "BYE", 0  ; upper case again for BASIC
+        !tx 147, 142, 9, 154, "BYE", 0 ; upper case again for BASIC
         rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; open logical file A on device X, secondary Y, without a name (the command channel)
-openc:  jsr SETLFS
+openc   jsr SETLFS
         lda #0
         jsr SETNAM
         jmp OPEN
 
 ; open logical file A on device X, secondary Y, with the name in CMD (CMDLEN bytes)
-openn:  jsr SETLFS
+openn   jsr SETLFS
         lda CMDLEN
         ldx #<CMD
         ldy #>CMD
@@ -317,19 +252,19 @@ openn:  jsr SETLFS
         jmp OPEN
 
 ; wait for a key
-getkey: jsr GETIN
+getkey  jsr GETIN
         beq getkey
         rts
 
 ; DV / EL: device and command channel of the unit whose list is shown
-setunit:ldx UN
+setunit ldx UN
         lda DEVS,x
         sta DV
         lda #15
         cpx #0
         beq @s
         lda #14
-@s:     sta EL
+@s      sta EL
         rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
@@ -337,7 +272,7 @@ setunit:ldx UN
 ; count down FLDN and are dropped at 0 (a field of fixed width, padded by fpad); control codes always go out.
 
 ; one character; keeps A, X, Y
-fch:    sta FCH
+fch     sta FCH
         stx FX
         sty FY
         ldx OUTM
@@ -346,22 +281,22 @@ fch:    sta FCH
         bcs @ch
         tax
         beq @ch
-        lda THEME-1,x           ; 1-7: a colour reference
+        lda THEME-1,x           ; 1-7: a color reference
         sta TXTCOL
         jmp @r
-@ch:    and #$7F
+@ch     and #$7F
         cmp #$20
         bcc @out
         lda FLDN
         beq @r
         dec FLDN
-@out:   lda FCH
+@out    lda FCH
         jsr CHROUT
         lda #0
         sta QTSW
         sta INSRT
         beq @r
-@buf:   dex
+@buf    dex
         bne @cmd
         ldx LBLEN
         cpx #255
@@ -370,55 +305,55 @@ fch:    sta FCH
         sta LINEB,x
         inc LBLEN
         bne @r
-@cmd:   ldx CMDLEN
+@cmd    ldx CMDLEN
         cpx #255
         bcs @r
         lda FCH
         sta CMD,x
         inc CMDLEN
-@r:     ldx FX
+@r      ldx FX
         ldy FY
         lda FCH
         rts
 
-scr:    lda #OUTSCR
+scr     lda #OUTSCR
         sta OUTM
         rts
 
-cmdbeg: lda #OUTCMD
+cmdbeg  lda #OUTCMD
         sta OUTM
         lda #0
         sta CMDLEN
         rts
 
 ; fch with a letter $41-$5A shown in upper case (lower-case character set): the types from the listing
-fchu:   cmp #'A'
+fchu    cmp #'A'
         bcc @f
         cmp #'Z'+1
         bcs @f
         ora #$80
-@f:     jmp fch
+@f      jmp fch
 
 ; spaces up to the end of the field
-fpad:   lda FLDN
+fpad    lda FLDN
         beq @d
         lda #' '
         jsr fch
         jmp fpad
-@d:     rts
+@d      rts
 
 ; print the string that follows the JSR (zero terminated)
-pstr:   pla
+pstr    pla
         sta P1
         pla
         sta P1+1
         ldy #1
-@l:     lda (P1),y
+@l      lda (P1),y
         beq @d
         jsr fch
         iny
         bne @l
-@d:     tya
+@d      tya
         clc
         adc P1
         tax
@@ -430,15 +365,15 @@ pstr:   pla
         rts
 
 ; A in decimal, right justified in X columns (0 = no padding)
-fnum:   stx NW
+fnum    stx NW
         ldx #0
-@l:     ldy #0
-@s:     cmp #10
+@l      ldy #0
+@s      cmp #10
         bcc @r
         sbc #10
         iny
         bne @s
-@r:     ora #'0'
+@r      ora #'0'
         sta DIGS,x
         inx
         tya
@@ -450,34 +385,34 @@ fnum:   stx NW
         bcc @o
         beq @o
         tay
-@p:     lda #' '
+@p      lda #' '
         jsr fch
         dey
         bne @p
-@o:     ldx ND
-@q:     lda DIGS-1,x
+@o      ldx ND
+@q      lda DIGS-1,x
         jsr fch
         dex
         bne @q
         rts
 
 ; the SLEN characters at (P2), from index 0 / from index Y
-fmem:   ldy #0
-fmemy:  cpy SLEN
+fmem    ldy #0
+fmemy   cpy SLEN
         bcs @d
         lda (P2),y
         jsr fch
         iny
         bne fmemy
-@d:     rts
+@d      rts
 
 ; (P2)/SLEN in a field of A columns
-ffield: sta FLDN
+ffield  sta FLDN
         jsr fmem
         jmp fpad
 
 ; (P2)/SLEN in a field of A columns; when it is longer, ".." and its last A-2 characters
-fpath:  sta FLDN
+fpath   sta FLDN
         cmp SLEN
         bcs @all
         lda #'.'
@@ -489,33 +424,35 @@ fpath:  sta FLDN
         tay
         jsr fmemy
         jmp fpad
-@all:   jsr fmem
+@all    jsr fmem
         jmp fpad
 
 ; cursor to row X, column 0
-atrow:  ldy #0
+atrow   ldy #0
         clc
         jmp PLOT
 
 ; cursor to row X, a field of 39 columns
-rowbeg: jsr atrow
+rowbeg  jsr atrow
         lda #39
         sta FLDN
         rts
 
-msgbeg: jsr scr
+msgbeg  jsr scr
         ldx #20
         jsr rowbeg
         lda #C_TIME
         jmp fch
 
 ; "ERROR nn,message" on row 20
-perr:   jsr msgbeg
-        PS "Error "
+perr    jsr msgbeg
+        jsr pstr
+        !pet "Error ", 0
         lda ENUM
         ldx #0
         jsr fnum
-        PS ","
+        jsr pstr
+        !pet ",", 0
         jsr pemsg
         jmp fpad
 
@@ -528,9 +465,9 @@ perr:   jsr msgbeg
 ; Which registers: the KERNAL build's ($DE10) when $DE19/$DE1A read $D6 $64, else the agent's ($DF00) when $DF09/$DF0A do. Reads only
 ; until then: under the agent IO1 is its code (the handler keeps writes there), under the TR menu's own handler $DE11 / $DE15 are
 ; EEPROM-backed settings. A few tries, as the KERNAL's td_here does (a late answer reads a mixed byte).
-; C=0 found: every MREG operand points at it, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
-findmb: ldx #4
-@try:   lda MBXK+MBXID0
+; C=0 found: every +mr operand points at it, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
+findmb  ldx #4
+@try    lda MBXK+MBXID0
         cmp #$D6
         bne @a
         lda MBXK+MBXID1
@@ -540,7 +477,7 @@ findmb: ldx #4
         ldx #>MBXK
         ldy #0
         beq @set
-@a:     lda MBXA+MBXID0
+@a      lda MBXA+MBXID0
         cmp #$D6
         bne @n
         lda MBXA+MBXID1
@@ -550,15 +487,15 @@ findmb: ldx #4
         ldx #>MBXA
         ldy #$80
         bne @set
-@n:     dex
+@n      dex
         bne @try
         sec
         rts
-@set:   sty AGENT
+@set    sty AGENT
         sta MRLO
         stx MRHI
         ldx #0
-@fix:   cpx #MRTABN
+@fix    cpx #MRTABN
         beq @done
         lda MRTAB,x             ; P2 = the operand's address
         sta P2
@@ -576,20 +513,20 @@ findmb: ldx #4
         inx
         inx
         bne @fix
-@done:  clc
+@done   clc
         rts
 
 ; The agent's bus scan, as the KERNAL's bus_scan (patches/vcall.inc) does it: which numbers are free on the real serial bus, probed with
 ; LISTEN + SECOND (the stock routines: the agent hooks only the vectored calls). Otherwise the agent's engine would scan at the first
 ; OPEN, after this program had read DEV0/DEV1, and that OPEN could reach a real drive on the number the unit gave up.
-agscan: lda #VIO_SCAN
+agscan  lda #VIO_SCAN
         jsr mcall
         bcs @out                ; not answered
         cmp #0
         beq @out                ; no unit needs a number
         lda #8
         sta SDV
-@p:     lda #0
+@p      lda #0
         sta STATUS
         lda SDV
         jsr LISTEN
@@ -600,15 +537,15 @@ agscan: lda #VIO_SCAN
         lda STATUS
         bmi @free
         jsr UNLSN               ; a real device is there
-@nx:    inc SDV
+@nx     inc SDV
         lda SDV
         cmp #31
         bcc @p
-@out:   lda #0
+@out    lda #0
         sta STATUS
         rts
-@free:  lda SDV
-        MREG sta, MBXARG
+@free   lda SDV
+        +mr ~mr_sc : sta MBXARG
         lda #VIO_FREE
         jsr mcall
         bcs @out
@@ -617,11 +554,11 @@ agscan: lda #VIO_SCAN
         beq @out
 
 ; one mailbox command A: C=0 answered (A = DATA, MST = ST), C=1 not (not mine, a bus-scan request, or no answer in about a second)
-mcall:  MREG sta, MBXCMD
+mcall   +mr ~mr_m0 : sta MBXCMD
         lda #0
         sta MW0
         sta MW1
-@w:     MREG lda, MBXSTAT
+@w      +mr ~mr_m1 : lda MBXSTAT
         cmp #STAT_OK
         beq @ok
         cmp #STAT_NOTMINE
@@ -632,36 +569,36 @@ mcall:  MREG sta, MBXCMD
         bne @w
         inc MW1
         bne @w
-@no:    sec
+@no     sec
         rts
-@ok:    MREG lda, MBXST         ; each answer byte read twice in a row until two agree, as the KERNAL does
-        MREG cmp, MBXST
+@ok     +mr ~mr_m2 : lda MBXST  ; each answer byte read twice in a row until two agree, as the KERNAL does
+        +mr ~mr_m3 : cmp MBXST
         bne @ok
         sta MST
-@d:     MREG lda, MBXDATA
-        MREG cmp, MBXDATA
+@d      +mr ~mr_m4 : lda MBXDATA
+        +mr ~mr_m5 : cmp MBXDATA
         bne @d
         clc
         rts
 
 ; open the listing named in CMD (CMDLEN bytes) on DV for fget: C=0 open; C=1 not, ENUM = the drive's error if it refused (else 0:
 ; a name of 128 bytes or more, or no answer: use OPEN + CHRIN)
-fopen:  lda #0
+fopen   lda #0
         sta FAST
         sta ENUM
         ldy CMDLEN
         bmi @no                 ; >= WINSZ: does not fit the window
         ldy #0
-@nm:    lda CMD,y               ; the name -> window, each byte read back
+@nm     lda CMD,y               ; the name -> window, each byte read back
         sta WIN,y
         cmp WIN,y
         bne @nm
         iny
         cpy CMDLEN
         bne @nm
-        MREG sty, MBXLEN
+        +mr ~mr_f0 : sty MBXLEN
         lda DV
-        MREG sta, MBXARG
+        +mr ~mr_f1 : sta MBXARG
         lda #C_FLOPEN
         jsr mcall
         bcs @no
@@ -676,18 +613,18 @@ fopen:  lda #0
         sta FAST
         clc
         rts
-@err:   jsr rdel                ; why (62 for a folder that is not there, ...)
-@no:    sec
+@err    jsr rdel                ; why (62 for a folder that is not there, ...)
+@no     sec
         rts
 
 ; the next byte of the listing: from the block reader after fopen, else CHRIN
-rdb:    bit FAST
+rdb     bit FAST
         bmi fget
         jmp CHRIN
 
 ; the next byte of a listing opened by fopen, with STATUS as CHRIN from a serial file leaves it: $40 with the last byte, $42 when
 ; nothing is left (a byte 0 then) or a block was not answered. X, Y kept.
-fget:   stx FGX
+fget    stx FGX
         ldx FI
         cpx FN
         bcc @have
@@ -704,7 +641,7 @@ fget:   stx FGX
         stx FI
         cpx FN
         bcc @have
-@past:  lda #$40
+@past   lda #$40
         sta FEND
         lda STATUS
         ora #$42
@@ -712,7 +649,7 @@ fget:   stx FGX
         lda #0
         ldx FGX
         rts
-@have:  lda WIN,x
+@have   lda WIN,x
         cmp WIN,x
         bne @have
         inx
@@ -725,18 +662,18 @@ fget:   stx FGX
         lda STATUS              ; the last byte of the last block
         ora #$40
         sta STATUS
-@more:  pla
-@out:   ldx FGX
+@more   pla
+@out    ldx FGX
         rts
 
 ; Read the error channel of logical file A: ERRBUF = "NN,MESSAGE,TT,SS", ENUM = NN (255 = not understood).
-rdel:   lda EL
-rderr:  tax
+rdel    lda EL
+rderr   tax
         jsr CHKIN
         lda #0
         sta STATUS
         sta EI
-@l:     jsr CHRIN
+@l      jsr CHRIN
         ldy EI
         cmp #13
         beq @e
@@ -747,7 +684,7 @@ rderr:  tax
         lda EI
         cmp #46
         bcc @l
-@e:     ldy EI
+@e      ldy EI
         lda #0
         sta ERRBUF,y
         sty ERRLEN
@@ -758,10 +695,10 @@ rderr:  tax
         cmp #10
         bcs @bad
         sta TMP
-        asl a
-        asl a
+        asl
+        asl
         adc TMP
-        asl a
+        asl
         sta TMP
         lda ERRBUF+1
         sec
@@ -772,62 +709,64 @@ rderr:  tax
         adc TMP
         sta ENUM
         rts
-@bad:   lda #255
+@bad    lda #255
         sta ENUM
         rts
 
 ; the message part of the error channel text (after the first comma, without the leading spaces, up to the next comma)
-pemsg:  ldy #3
+pemsg   ldy #3
         cpy ERRLEN
         bcs @d
-@s:     lda ERRBUF,y
+@s      lda ERRBUF,y
         cmp #' '
         bne @l
         iny
         bne @s
-@l:     lda ERRBUF,y
+@l      lda ERRBUF,y
         beq @d
         cmp #','
         beq @d
         jsr fch
         iny
         bne @l
-@d:     rts
+@d      rts
 
 ; send CMD and a CR to the command channel of the shown unit, then read its error channel
-sendcmd:jsr scr
+sendcmd jsr scr
         ldx EL
         jsr CHKOUT
         lda #0
         sta IX
-@l:     ldy IX
+@l      ldy IX
         cpy CMDLEN
         bcs @e
         lda CMD,y
         jsr CHROUT
         inc IX
         bne @l
-@e:     lda #13
+@e      lda #13
         jsr CHROUT
         jsr CLRCHN
         jmp rdel
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; MPL / MPB: the image mounted on each unit, from the first line of "!STATE" (empty when none or no unit); THEME from its third line.
-readstate:
+readstate
         ldx #1
-@u:     stx U
+@u      stx U
         lda #0
         sta MPL,x
         cpx #0
         beq @o
         lda #128
-@o:     sta UOFS
+@o      sta UOFS
         lda DEVS,x
         bne @go
         jmp @nx
-@go:
-        CMDS "!STATE"
+@go
+        jsr cmdbeg
+        jsr pstr
+        !tx "!STATE", 0
         jsr scr
         ldx U
         lda DEVS,x
@@ -839,7 +778,7 @@ readstate:
         ldx U
         beq @e
         lda #14
-@e:     jsr rderr
+@e      jsr rderr
         lda ENUM
         bne @cl
         ldx #2
@@ -847,7 +786,7 @@ readstate:
         lda #0
         sta STATUS
         sta LLEN
-@rd:    jsr CHRIN
+@rd     jsr CHRIN
         sta CH
         lda STATUS
         sta RS
@@ -865,26 +804,26 @@ readstate:
         lda CH
         sta MPB,x
         inc LLEN
-@sk:    lda RS
+@sk     lda RS
         and #$40
         beq @rd
-@end:   lda RS                  ; 0: the line ended in CR with more to come
+@end    lda RS                  ; 0: the line ended in CR with more to come
         bne @ce
         jsr rdtheme
-@ce:    jsr CLRCHN
+@ce     jsr CLRCHN
         ldx U
         lda LLEN
         sta MPL,x
-@cl:    lda #2
+@cl     lda #2
         jsr CLOSE
-@nx:    ldx U
+@nx     ldx U
         dex
         bmi @x
         jmp @u
-@x:     rts
+@x      rts
 
 ; the rest of "!STATE" (input from it): skip the folder line, then THEME = the NumColorRefs hex digits of the third line (all or nothing)
-rdtheme:jsr CHRIN
+rdtheme jsr CHRIN
         sta CH
         lda STATUS
         bne @x
@@ -893,7 +832,7 @@ rdtheme:jsr CHRIN
         bne rdtheme
         lda #0
         sta T1
-@h:     jsr CHRIN
+@h      jsr CHRIN
         sta CH
         lda STATUS
         and #$BF
@@ -909,8 +848,8 @@ rdtheme:jsr CHRIN
         bcs @x
         sbc #'A'-10-1           ; carry clear: A-'A'+10
         jmp @st
-@dg:    and #15
-@st:    ldx T1
+@dg     and #15
+@st     ldx T1
         sta THN,x
         inx
         stx T1
@@ -918,22 +857,22 @@ rdtheme:jsr CHRIN
         bcs @ok
         lda STATUS
         beq @h
-@x:     rts
-@ok:    dex
-@cp:    lda THN,x
+@x      rts
+@ok     dex
+@cp     lda THN,x
         sta THEME,x
         dex
         bpl @cp
         rts
 
 ; P2 / SLEN = the image mounted on unit X
-mpptr:  lda MPL,x
+mpptr   lda MPL,x
         sta SLEN
         lda #<MPB
         cpx #0
         beq @z
         lda #<(MPB+128)
-@z:     sta P2
+@z      sta P2
         lda #>MPB
         sta P2+1
         rts
@@ -941,16 +880,18 @@ mpptr:  lda MPL,x
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; Read the shown unit's "!CONFIG" into TXT: lines end in CR, 0 bytes are dropped, at most MAXL lines of 255 characters
 ; (a missing file is an empty list). Then index and parse.
-readcfg:lda #<TXT
+readcfg lda #<TXT
         sta P3
         lda #>TXT
         sta P3+1
-        lda #>TXT+15
+        lda #(>TXT)+15
         sta LIMHI
         lda #0
         sta NLC
         sta LLEN
-        CMDS "!CONFIG"
+        jsr cmdbeg
+        jsr pstr
+        !tx "!CONFIG", 0
         jsr scr
         lda #2
         ldx DV
@@ -963,7 +904,7 @@ readcfg:lda #<TXT
         jsr CHKIN
         lda #0
         sta STATUS
-@rd:    jsr CHRIN
+@rd     jsr CHRIN
         sta CH
         lda STATUS
         sta RS
@@ -975,7 +916,7 @@ readcfg:lda #<TXT
         bne @c
         jsr endl
         jmp @nx
-@c:     lda LLEN
+@c      lda LLEN
         cmp #255
         bcs @nx
         lda NLC
@@ -985,14 +926,14 @@ readcfg:lda #<TXT
         jsr putc
         bcs @nx
         inc LLEN
-@nx:    lda RS
+@nx     lda RS
         and #$40
         beq @rd
-@eof:   lda LLEN
+@eof    lda LLEN
         beq @e2
         jsr endl                ; a last line without a CR
-@e2:    jsr CLRCHN
-@cl:    lda #2
+@e2     jsr CLRCHN
+@cl     lda #2
         jsr CLOSE
         sec
         lda P3
@@ -1004,7 +945,7 @@ readcfg:lda #<TXT
         jmp reindex
 
 ; end a line of the file: a CR, unless MAXL lines are there already
-endl:   lda #0
+endl    lda #0
         sta LLEN
         lda NLC
         cmp #MAXL
@@ -1014,22 +955,22 @@ endl:   lda #0
         ldy #0
         sta (P3),y
         jmp incp3
-@d:     rts
+@d      rts
 
 ; A -> (P3)+ while P3 is below page LIMHI (carry set = no room; the last page is left for the CRs)
-putc:   ldx P3+1
+putc    ldx P3+1
         cpx LIMHI
         bcs putcr
         ldy #0
         sta (P3),y
-incp3:  inc P3
+incp3   inc P3
         bne putok
         inc P3+1
-putok:  clc
-putcr:  rts
+putok   clc
+putcr   rts
 
 ; LSL/LSH/LLN, NL: start and length of every line of TXT (TLEN bytes); then parse
-reindex:lda #<TXT
+reindex lda #<TXT
         sta P4
         clc
         adc TLEN
@@ -1042,23 +983,23 @@ reindex:lda #<TXT
         sta NL
         sta LLEN
         jsr @mark
-@l:     lda P4
+@l      lda P4
         cmp TEND
         bne @c
         lda P4+1
         cmp TEND+1
         bne @c
         jmp parse
-@c:     ldy #0
+@c      ldy #0
         lda (P4),y
         inc P4
         bne @i
         inc P4+1
-@i:     cmp #13
+@i      cmp #13
         beq @e
         inc LLEN
         jmp @l
-@e:     ldx NL
+@e      ldx NL
         cpx #MAXL
         bcs @s
         lda LS0
@@ -1068,32 +1009,32 @@ reindex:lda #<TXT
         lda LLEN
         sta LLN,x
         inc NL
-@s:     lda #0
+@s      lda #0
         sta LLEN
         jsr @mark
         jmp @l
-@mark:  lda P4
+@mark   lda P4
         sta LS0
         lda P4+1
         sta LS0+1
         rts
 
-; The entries: lines that start with "/" after any spaces, "path[, colour[, flashes]]"; the numbers are 1-3 digits after the last
-; commas (spaces around them allowed), colour taken AND 15, flashes at most 20, both 1 when missing. NE entries of at most MAXE:
+; The entries: lines that start with "/" after any spaces, "path[, color[, flashes]]"; the numbers are 1-3 digits after the last
+; commas (spaces around them allowed), color taken AND 15, flashes at most 20, both 1 when missing. NE entries of at most MAXE:
 ; EPL/EPH/ELN the path (in TXT), EC, EF, EX the line.
-parse:  lda #0
+parse   lda #0
         sta NE
         sta LI
-@ln:    lda LI
+@ln     lda LI
         cmp NL
         bcc @1
         rts
-@1:     lda NE
+@1      lda NE
         cmp #MAXE
         bcc @2
         rts
-@nxj:   jmp @nx
-@2:     ldx LI
+@nxj    jmp @nx
+@2      ldx LI
         lda LSL,x
         sta P2
         lda LSH,x
@@ -1101,14 +1042,14 @@ parse:  lda #0
         lda LLN,x
         sta SLEN
         ldy #0
-@sp:    cpy SLEN
+@sp     cpy SLEN
         bcs @nxj
         lda (P2),y
         cmp #' '
         bne @3
         iny
         bne @sp
-@3:     cmp #'/'
+@3      cmp #'/'
         bne @nxj
         sty T0                  ; the path starts here
         tya
@@ -1117,7 +1058,7 @@ parse:  lda #0
         sta P2
         bcc @4
         inc P2+1
-@4:     lda SLEN
+@4      lda SLEN
         sec
         sbc T0
         sta SLEN
@@ -1132,11 +1073,11 @@ parse:  lda #0
         sta N1+1
         jsr trailnum
         bcc @two
-        lda N1                  ; one number: the colour
+        lda N1                  ; one number: the color
         and #15
         sta PC
         jmp @tr
-@two:   lda V
+@two    lda V
         and #15
         sta PC
         lda N1+1
@@ -1144,9 +1085,9 @@ parse:  lda #0
         lda N1
         cmp #21
         bcc @f
-@20:    lda #20
-@f:     sta PF
-@tr:    ldy SLEN                ; trailing spaces off
+@20     lda #20
+@f      sta PF
+@tr     ldy SLEN                ; trailing spaces off
         beq @st
         dey
         lda (P2),y
@@ -1154,7 +1095,7 @@ parse:  lda #0
         bne @st
         dec SLEN
         jmp @tr
-@st:    ldx NE
+@st     ldx NE
         lda P2
         sta EPL,x
         lda P2+1
@@ -1168,16 +1109,16 @@ parse:  lda #0
         lda LI
         sta EX,x
         inc NE
-@nx:    inc LI
+@nx     inc LI
         jmp @ln
 
 ; the number after the last comma of (P2)/SLEN: V, and SLEN cut before that comma; carry set = none
-trailnum:
+trailnum
         ldy SLEN
         jmp @f
-@no0:   sec
+@no0    sec
         rts
-@f:     tya
+@f      tya
         beq @no0
         dey
         lda (P2),y
@@ -1185,16 +1126,16 @@ trailnum:
         bne @f
         sty CI
         iny
-@s:     cpy SLEN
+@s      cpy SLEN
         bcs @no0
         lda (P2),y
         cmp #' '
         bne @e0
         iny
         bne @s
-@e0:    sty T0                  ; first non-space
+@e0     sty T0                  ; first non-space
         ldy SLEN
-@e:     dey
+@e      dey
         lda (P2),y
         cmp #' '
         beq @e
@@ -1209,7 +1150,7 @@ trailnum:
         sta V
         sta V+1
         ldy T0
-@d:     lda (P2),y
+@d      lda (P2),y
         sec
         sbc #'0'
         cmp #10
@@ -1238,29 +1179,29 @@ trailnum:
         sta V
         bcc @n
         inc V+1
-@n:     iny
+@n      iny
         cpy T1
         bcc @d
         lda CI
         sta SLEN
         clc
         rts
-@no:    sec
+@no     sec
         rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; Change the file: OPK 0 = line OPA becomes LINEB, 1 = line OPA goes, 2 = lines OPA and OPB swap, 3 = LINEB is added at the end.
 ; The new text is built in NEWB and copied to TXT, then indexed and parsed. Carry set (nothing changed) when it does not fit.
-rebuild:lda #<NEWB
+rebuild lda #<NEWB
         sta P3
         lda #>NEWB
         sta P3+1
-        lda #>NEWB+15
+        lda #(>NEWB)+15
         sta LIMHI
         lda #0
         sta OVF
         sta LI
-@l:     lda LI
+@l      lda LI
         cmp NL
         bcs @end
         ldx LI
@@ -1271,11 +1212,11 @@ rebuild:lda #<NEWB
         bne @a
         ldx OPB
         jmp @cp
-@a:     cpx OPB
+@a      cpx OPB
         bne @cp
         ldx OPA
         jmp @cp
-@n2:    cpx OPA
+@n2     cpx OPA
         bne @cp
         cmp #1
         beq @nx
@@ -1283,18 +1224,18 @@ rebuild:lda #<NEWB
         bne @cp
         jsr emitlb
         jmp @nx
-@cp:    jsr emitln
-@nx:    inc LI
+@cp     jsr emitln
+@nx     inc LI
         jmp @l
-@end:   lda OPK
+@end    lda OPK
         cmp #3
         bne @ck
         jsr emitlb
-@ck:    lda OVF
+@ck     lda OVF
         beq @ok
         sec
         rts
-@ok:    sec
+@ok     sec
         lda P3
         sbc #<NEWB
         sta TLEN
@@ -1311,7 +1252,7 @@ rebuild:lda #<NEWB
         sta P3+1
         ldx #16                 ; the whole 4 KB
         ldy #0
-@m:     lda (P4),y
+@m      lda (P4),y
         sta (P3),y
         iny
         bne @m
@@ -1324,22 +1265,22 @@ rebuild:lda #<NEWB
         rts
 
 ; line X of TXT / LINEB, and a CR, to (P3)
-emitln: lda LSL,x
+emitln  lda LSL,x
         sta P4
         lda LSH,x
         sta P4+1
         lda LLN,x
         sta SLEN2
         jmp emit
-emitlb: lda #<LINEB
+emitlb  lda #<LINEB
         sta P4
         lda #>LINEB
         sta P4+1
         lda LBLEN
         sta SLEN2
-emit:   lda #0
+emit    lda #0
         sta IX
-@l:     ldy IX
+@l      ldy IX
         cpy SLEN2
         bcs @cr
         lda (P4),y
@@ -1347,40 +1288,47 @@ emit:   lda #0
         bcc @n
         lda #1
         sta OVF
-@n:     inc IX
+@n      inc IX
         jmp @l
-@cr:    lda #13
+@cr     lda #13
         ldy #0
         sta (P3),y
         jmp incp3
 
-; LINEB = "path, colour, flashes" from (P2)/SLEN, PC, PF
-mkline: lda #OUTLINE
+; LINEB = "path, color, flashes" from (P2)/SLEN, PC, PF
+mkline  lda #OUTLINE
         sta OUTM
         lda #0
         sta LBLEN
         jsr fmem
-        PS ", "
+        jsr pstr
+        !pet ", ", 0
         lda PC
         ldx #0
         jsr fnum
-        PS ", "
+        jsr pstr
+        !pet ", ", 0
         lda PF
         ldx #0
         jsr fnum
         jmp scr
 
 ; Write TXT to the shown unit's "!CONFIG,W" (refused over SAVEMAX bytes) and say how it went.
-save:   lda TLEN+1
+save    lda TLEN+1
         cmp #>(SAVEMAX+1)
         bcc @ok
         bne @long
         lda TLEN
         cmp #<(SAVEMAX+1)
         bcc @ok
-@long:  MSG "List too long to save"
+@long   jsr msgbeg
+        jsr pstr
+        !pet "List too long to save", 0
+        jsr fpad
         rts
-@ok:    CMDS "!CONFIG,W"
+@ok     jsr cmdbeg
+        jsr pstr
+        !tx "!CONFIG,W", 0
         jsr scr
         lda #2
         ldx DV
@@ -1392,10 +1340,11 @@ save:   lda TLEN+1
         lda #2
         jsr CLOSE
         jsr msgbeg
-        PS "Cannot write:"
+        jsr pstr
+        !pet "Cannot write:", 0
         jsr pemsg
         jmp fpad
-@w:     ldx #2
+@w      ldx #2
         jsr CHKOUT
         lda #<TXT
         sta P4
@@ -1404,32 +1353,36 @@ save:   lda TLEN+1
         lda #0
         sta CNT
         sta CNT+1
-@l:     lda CNT
+@l      lda CNT
         cmp TLEN
         bne @c
         lda CNT+1
         cmp TLEN+1
         beq @e
-@c:     ldy #0
+@c      ldy #0
         lda (P4),y
         jsr CHROUT
         inc P4
         bne @i
         inc P4+1
-@i:     inc CNT
+@i      inc CNT
         bne @l
         inc CNT+1
         jmp @l
-@e:     jsr CLRCHN
+@e      jsr CLRCHN
         lda #2
         jsr CLOSE
         jsr rdel
         lda ENUM
         bne @we
-        MSG "Saved"
+        jsr msgbeg
+        jsr pstr
+        !pet "Saved", 0
+        jsr fpad
         rts
-@we:    jsr msgbeg
-        PS "Write error "
+@we     jsr msgbeg
+        jsr pstr
+        !pet "Write error ", 0
         lda ENUM
         ldx #0
         jsr fnum
@@ -1437,113 +1390,146 @@ save:   lda TLEN+1
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; The screen: row 0 title, 1-2 the units, 3 the list header, 4-19 the list, 20 messages, 21-23 the keys.
-drawall:jsr scr
-        PS C_NAME, 147          ; the menu clears in the name colour
+drawall jsr scr
+        jsr pstr                ; the menu clears in the name color
+        !pet C_NAME, 147, 0
         ldx #0
         jsr rowbeg
-        PS C_BAN, 18, "             TDrive Config"
+        jsr pstr
+        !pet C_BAN, 18, "             TDrive Config", 0
         jsr fpad
-        PS 146
+        jsr pstr
+        !pet 146, 0
         lda #$A0                ; the banner's last column straight into the screen: printing it would link rows 0 and 1
         sta $0400+39
         lda THEME+2
         sta $D800+39
-drawmid:jsr drawdrv
+drawmid jsr drawdrv
         jsr drawlh
         jsr drawlist
         ldx #21
         jsr rowbeg
-        KEYS "Return", " Mount ", "B", " Browse+Mount ", "U", " Unmount"
+        jsr pstr
+        !by 18, C_OPT : !pet "Return" : !by 146, C_SRC : !pet " Mount "
+        !by 18, C_OPT : !pet "B" : !by 146, C_SRC : !pet " Browse+Mount "
+        !by 18, C_OPT : !pet "U" : !by 146, C_SRC : !pet " Unmount"
+        !by 0
         jsr fpad
         ldx #22
         jsr rowbeg
-        KEYS "A", " Add ", "E", " Edit ", "D", " Delete ", "+/-", " Reorder"
+        jsr pstr
+        !by 18, C_OPT : !pet "A" : !by 146, C_SRC : !pet " Add "
+        !by 18, C_OPT : !pet "E" : !by 146, C_SRC : !pet " Edit "
+        !by 18, C_OPT : !pet "D" : !by 146, C_SRC : !pet " Delete "
+        !by 18, C_OPT : !pet "+/-" : !by 146, C_SRC : !pet " Reorder"
+        !by 0
         jsr fpad
         ldx #23
         jsr rowbeg
-        KEYS "T", " SD/USB list ", "R", " Refresh ", "Q", " Exit to menu"
+        jsr pstr
+        !by 18, C_OPT : !pet "T" : !by 146, C_SRC : !pet " SD/USB list "
+        !by 18, C_OPT : !pet "R" : !by 146, C_SRC : !pet " Refresh "
+        !by 18, C_OPT : !pet "Q" : !by 146, C_SRC : !pet " Exit to menu"
+        !by 0
         jmp fpad
 
 ; "SD  8: /path" / "USB 9: (Nothing mounted)" / "USB  : No drive", the shown unit's name in reverse
-drawdrv:lda #0
+drawdrv lda #0
         sta U
-@u:     ldx U
+@u      ldx U
         inx
         jsr atrow
         lda #255
         sta FLDN
-        PS C_SRC
+        jsr pstr
+        !pet C_SRC, 0
         lda U
         cmp UN
         bne @n
-        PS 18, C_OPT
-@n:     lda U
+        jsr pstr
+        !pet 18, C_OPT, 0
+@n      lda U
         bne @usb
-        PS "SD "
+        jsr pstr
+        !pet "SD ", 0
         jmp @num
-@usb:   PS "USB"
-@num:   ldx U
+@usb    jsr pstr
+        !pet "USB", 0
+@num    ldx U
         lda DEVS,x
         bne @d
-        PS "  : "
+        jsr pstr
+        !pet "  : ", 0
         jmp @m
-@d:     ldx #2
+@d      ldx #2
         jsr fnum
-        PS ": "
-@m:     PS 146, C_NAME
+        jsr pstr
+        !pet ": ", 0
+@m      jsr pstr
+        !pet 146, C_NAME, 0
         lda #32
         sta FLDN
         ldx U
         lda DEVS,x
         bne @h
-        PS "No drive"
+        jsr pstr
+        !pet "No drive", 0
         jmp @p
-@h:     lda MPL,x
+@h      lda MPL,x
         bne @mp
-        PS "(Nothing mounted)"
+        jsr pstr
+        !pet "(Nothing mounted)", 0
         jmp @p
-@mp:    jsr mpptr
+@mp     jsr mpptr
         lda #32
         jsr fpath
-@p:     jsr fpad
+@p      jsr fpad
         inc U
         lda U
         cmp #2
         bcs @x
         jmp @u
-@x:     rts
+@x      rts
 
-drawlh: ldx #3
+drawlh  ldx #3
         jsr rowbeg
-        PS C_SRC, "List: "
+        jsr pstr
+        !pet C_SRC, "List: ", 0
         lda UN
         bne @u
-        PS "SD"
+        jsr pstr
+        !pet "SD", 0
         jmp @n
-@u:     PS "USB"
-@n:     PS " ("
+@u      jsr pstr
+        !pet "USB", 0
+@n      jsr pstr
+        !pet " (", 0
         lda NE
         ldx #0
         jsr fnum
-        PS " entries)"
-@sp:    lda FLDN                ; the Alt button gesture for this list, at the right end
+        jsr pstr
+        !pet " entries)", 0
+@sp     lda FLDN                ; the Alt button gesture for this list, at the right end
         cmp #12
         bcc @alt
         lda #' '
         jsr fch
         jmp @sp
-@alt:   PS C_TIME
+@alt    jsr pstr
+        !pet C_TIME, 0
         lda UN
         bne @a2
-        PS "Alt: 1 tap"
+        jsr pstr
+        !pet "Alt: 1 tap", 0
         jmp @e
-@a2:    PS "Alt: 2 taps"
-@e:     jmp fpad
+@a2     jsr pstr
+        !pet "Alt: 2 taps", 0
+@e      jmp fpad
 
-drawlist:
+drawlist
         lda #0
         sta R
-@r:     lda TP
+@r      lda TP
         clc
         adc R
         sta KK
@@ -1554,8 +1540,8 @@ drawlist:
         bcc @r
         rts
 
-; list entry KK on its row: ">" on the cursor, "*" when mounted, number, path (reverse on the cursor), colour, a block in it, flashes
-drawrow:lda KK
+; list entry KK on its row: ">" on the cursor, "*" when mounted, number, path (reverse on the cursor), color, a block in it, flashes
+drawrow lda KK
         sec
         sbc TP
         clc
@@ -1566,30 +1552,33 @@ drawrow:lda KK
         cmp NE
         bcc @e
         jmp fpad
-@e:     lda #255
+@e      lda #255
         sta FLDN
-        PS C_OPT
+        jsr pstr
+        !pet C_OPT, 0
         lda #' '
         ldx KK
         cpx CU
         bne @c
         lda #'>'
-@c:     jsr fch
+@c      jsr fch
         jsr mstar
         jsr fch
-        PS C_SRC
+        jsr pstr
+        !pet C_SRC, 0
         lda KK
         clc
         adc #1
         ldx #3
         jsr fnum
-        PS " ", C_NAME
+        jsr pstr
+        !pet " ", C_NAME, 0
         lda KK
         cmp CU
         bne @p
         lda #18
         jsr fch
-@p:     ldx KK
+@p      ldx KK
         lda EPL,x
         sta P2
         lda EPH,x
@@ -1600,16 +1589,19 @@ drawrow:lda KK
         jsr fpath
         lda #255
         sta FLDN
-        PS 146, C_SRC, " "
+        jsr pstr
+        !pet 146, C_SRC, " ", 0
         ldx KK
         lda EC,x
         ldx #3
         jsr fnum
-        PS " ", 18
+        jsr pstr
+        !pet " ", 18, 0
         ldx KK
-        lda EC,x                ; the block in the entry's colour
+        lda EC,x                ; the block in the entry's color
         sta TXTCOL
-        PS "  ", 146, C_SRC
+        jsr pstr
+        !pet "  ", 146, C_SRC, 0
         ldx KK
         lda EF,x
         ldx #3
@@ -1617,10 +1609,10 @@ drawrow:lda KK
         lda #'X'
         jmp fch
 
-THEME:  .byte 0, 4, 4, 10, 7, 14, 13 ; the TR menu's colour references (its defaults until "!STATE" gives them): see C_BAN
+THEME   !by 0, 4, 4, 10, 7, 14, 13 ; the TR menu's color references (its defaults until "!STATE" gives them): see C_BAN
 
 ; A = '*' when entry KK is the image mounted on the shown unit, else ' '
-mstar:  ldx UN
+mstar   ldx UN
         jsr mpptr
         lda P2
         sta P4
@@ -1635,23 +1627,23 @@ mstar:  ldx UN
         lda EPH,x
         sta P2+1
         ldy SLEN
-@c:     dey
+@c      dey
         cpy #255
         beq @yes
         lda (P2),y
         cmp (P4),y
         beq @c
-@no:    lda #' '
+@no     lda #' '
         rts
-@yes:   lda #'*'
+@yes    lda #'*'
         rts
 
 ; keep the cursor on the screen
-fixtp:  lda CU
+fixtp   lda CU
         cmp TP
         bcs @a
         sta TP
-@a:     lda TP
+@a      lda TP
         clc
         adc #VR
         sta T0
@@ -1661,22 +1653,22 @@ fixtp:  lda CU
         sec
         sbc #VR-1
         sta TP
-@r:     rts
+@r      rts
 
 ; keep the cursor in the list
-clampcu:lda CU
+clampcu lda CU
         cmp NE
         bcc @r
         ldx NE
         dex
         bpl @s
         ldx #0
-@s:     stx CU
-@r:     rts
+@s      stx CU
+@r      rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; The keys.
-k_up:   lda CU
+k_up    lda CU
         beq @r
         dec CU
         lda CU
@@ -1684,15 +1676,15 @@ k_up:   lda CU
         bcs @two
         sta TP
         jmp drawlist
-@two:   sta KK
+@two    sta KK
         inc KK
         jsr drawrow
         lda CU
         sta KK
         jmp drawrow
-@r:     rts
+@r      rts
 
-k_down: lda CU
+k_down  lda CU
         clc
         adc #1
         cmp NE
@@ -1711,18 +1703,18 @@ k_down: lda CU
         lda CU
         sta KK
         jmp drawrow
-@sc:    lda CU
+@sc     lda CU
         sec
         sbc #VR-1
         sta TP
         jmp drawlist
-@r:     rts
+@r      rts
 
 ; RETURN: mount the entry
-k_ret:  lda NE
+k_ret   lda NE
         bne @go
         rts
-@go:    ldx CU
+@go     ldx CU
         lda EPL,x
         sta P2
         lda EPH,x
@@ -1730,60 +1722,77 @@ k_ret:  lda NE
         lda ELN,x
         sta SLEN
 ; "CD:" + (P2)/SLEN on the shown unit
-mountp: CMDS "CD:"
+mountp  jsr cmdbeg
+        jsr pstr
+        !tx "CD:", 0
         jsr fmem
         jsr sendcmd
         lda ENUM
         bne @e
-        MSG "Mounted"
+        jsr msgbeg
+        jsr pstr
+        !pet "Mounted", 0
+        jsr fpad
         jmp @d
-@e:     jsr perr
-@d:     jsr readstate
+@e      jsr perr
+@d      jsr readstate
         jmp drawmid
 
 ; B: browse the card, mount the image picked
-k_brow: jsr browse
+k_brow  jsr browse
         lda BR
         bne @m
         jmp drawall
-@m:     jsr pathbp
+@m      jsr pathbp
         jmp mountp
 
 ; U: unmount
-k_unm:  ldx UN
+k_unm   ldx UN
         lda MPL,x
         bne @u
-        MSG "Nothing mounted"
+        jsr msgbeg
+        jsr pstr
+        !pet "Nothing mounted", 0
+        jsr fpad
         rts
-@u:     CMDS {"CD:", LARROW}
+@u      jsr cmdbeg
+        jsr pstr
+        !tx "CD:", LARROW, 0
         jsr sendcmd
         lda ENUM
         bne @e
-        MSG "Unmounted"
+        jsr msgbeg
+        jsr pstr
+        !pet "Unmounted", 0
+        jsr fpad
         jmp @d
-@e:     jsr msgbeg
-        PS "Error "
+@e      jsr msgbeg
+        jsr pstr
+        !pet "Error ", 0
         lda ENUM
         ldx #0
         jsr fnum
         jsr fpad
-@d:     jsr readstate
+@d      jsr readstate
         jmp drawmid
 
-; A: add an entry (browse, colour, flashes)
-k_add:  lda NE
+; A: add an entry (browse, color, flashes)
+k_add   lda NE
         cmp #MAXE
         bcs @full
         lda NL
         cmp #MAXL-1
         bcc @ok
-@full:  MSG "List is full"
+@full   jsr msgbeg
+        jsr pstr
+        !pet "List is full", 0
+        jsr fpad
         rts
-@ok:    jsr browse
+@ok     jsr browse
         lda BR
         bne @c
         jmp drawall
-@c:     lda #15
+@c      lda #15
         sta NMAX
         lda #1
         ldx #<lbcol
@@ -1813,14 +1822,14 @@ k_add:  lda NE
         jsr fixtp
         jsr drawall
         jmp save
-@cn:    jmp drawall
-@long:  jmp toolong
+@cn     jmp drawall
+@long   jmp toolong
 
-; E: edit the entry (path, "?" browses for it; colour; flashes)
-k_edit: lda NE
+; E: edit the entry (path, "?" browses for it; color; flashes)
+k_edit  lda NE
         bne @go
         rts
-@go:    ldx CU
+@go     ldx CU
         lda EPL,x
         sta P2
         lda EPH,x
@@ -1829,21 +1838,21 @@ k_edit: lda NE
         cmp #255
         bcc @l
         lda #254
-@l:     sta EDLEN
+@l      sta EDLEN
         ldy #0
-@cp:    cpy EDLEN
+@cp     cpy EDLEN
         bcs @cd
         lda (P2),y
         sta EDBUF,y
         iny
         bne @cp
-@cd:    lda #78
+@cd     lda #78
         ldx #<lbpath
         ldy #>lbpath
         jsr edline
         bcc @got
         jmp drawmid
-@got:   lda EDLEN
+@got    lda EDLEN
         cmp #1
         bne @typed
         lda EDBUF
@@ -1853,23 +1862,26 @@ k_edit: lda NE
         lda BR
         bne @chk
         jmp drawall
-@typed: ldy #0
-@t:     cpy EDLEN
+@typed  ldy #0
+@t      cpy EDLEN
         bcs @td
         lda EDBUF,y
         sta PATHB,y
         iny
         bne @t
-@td:    sty PATHBL
-@chk:   lda PATHBL
+@td     sty PATHBL
+@chk    lda PATHBL
         beq @bad
         lda PATHB
         cmp #'/'
         beq @num
-@bad:   jsr drawmid
-        MSG "Path must start with /"
+@bad    jsr drawmid
+        jsr msgbeg
+        jsr pstr
+        !pet "Path must start with /", 0
+        jsr fpad
         rts
-@num:   lda #15
+@num    lda #15
         sta NMAX
         ldx CU
         lda EC,x
@@ -1898,24 +1910,29 @@ k_edit: lda NE
         bcs toolong
         jsr drawall
         jmp save
-@cn:    jmp drawall
+@cn     jmp drawall
 
-toolong:jsr drawall
-        MSG "List too long"
+toolong jsr drawall
+        jsr msgbeg
+        jsr pstr
+        !pet "List too long", 0
+        jsr fpad
         rts
 
 ; D: delete the entry (asks)
-k_del:  lda NE
+k_del   lda NE
         bne @go
         rts
-@go:    jsr msgbeg
-        PS "Delete entry "
+@go     jsr msgbeg
+        jsr pstr
+        !pet "Delete entry ", 0
         lda CU
         clc
         adc #1
         ldx #0
         jsr fnum
-        PS "? (y/n)"
+        jsr pstr
+        !pet "? (y/n)", 0
         jsr fpad
         jsr getkey
         cmp #'Y'
@@ -1924,7 +1941,7 @@ k_del:  lda NE
         beq @y
         jsr msgbeg
         jmp fpad
-@y:     lda #1
+@y      lda #1
         sta OPK
         ldx CU
         lda EX,x
@@ -1934,13 +1951,13 @@ k_del:  lda NE
         jmp moved
 
 ; +: move the entry down, -: up
-k_plus: lda CU
+k_plus  lda CU
         clc
         adc #1
         cmp NE
         bcc @go
         rts
-@go:    tax
+@go     tax
         lda EX,x
         sta OPB
         ldx CU
@@ -1950,14 +1967,14 @@ k_plus: lda CU
         sta OPK
         jsr rebuild
         inc CU
-moved:  jsr fixtp
+moved   jsr fixtp
         jsr drawmid
         jmp save
 
-k_minus:lda CU
+k_minus lda CU
         bne @go
         rts
-@go:    tax
+@go     tax
         dex
         lda EX,x
         sta OPB
@@ -1971,14 +1988,17 @@ k_minus:lda CU
         jmp moved
 
 ; T: the other unit's list
-k_tog:  lda UN
+k_tog   lda UN
         eor #1
         tax
         lda DEVS,x
         bne @ok
-        MSG "No drive on that unit"
+        jsr msgbeg
+        jsr pstr
+        !pet "No drive on that unit", 0
+        jsr fpad
         rts
-@ok:    stx UN
+@ok     stx UN
         jsr setunit
         jsr readcfg
         lda #0
@@ -1987,16 +2007,19 @@ k_tog:  lda UN
         jmp drawmid
 
 ; R: read everything again (the Alt button may have switched the disk)
-k_ref:  jsr readstate
+k_ref   jsr readstate
         jsr setunit
         jsr readcfg
         jsr clampcu
         jsr fixtp
         jsr drawmid
-        MSG "Refreshed"
+        jsr msgbeg
+        jsr pstr
+        !pet "Refreshed", 0
+        jsr fpad
         rts
 
-pathbp: lda #<PATHB
+pathbp  lda #<PATHB
         sta P2
         lda #>PATHB
         sta P2+1
@@ -2004,17 +2027,17 @@ pathbp: lda #<PATHB
         sta SLEN
         rts
 
-lbcol:  LC "Colour 0-15: ", 0
-lbfl:   LC "Flashes 0-20: ", 0
-lbpath: LC "Path(?=browse): ", 0
+lbcol   !pet "Color 0-15: ", 0
+lbfl    !pet "Flashes 0-20: ", 0
+lbpath  !pet "Path(?=browse): ", 0
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; Line editor on row 23: label at X/Y (zero terminated), EDBUF/EDLEN the text, at most A characters typed (a longer text can still be
 ; shortened). RETURN: carry clear; left arrow: carry set. Typed: codes 32-94.
-edline: sta ML
+edline  sta ML
         stx LBP
         sty LBP+1
-@show:  ldx #23
+@show   ldx #23
         jsr atrow
         lda #255
         sta FLDN
@@ -2025,12 +2048,12 @@ edline: sta ML
         lda LBP+1
         sta P2+1
         ldy #0
-@lb:    lda (P2),y
+@lb     lda (P2),y
         beq @le
         jsr fch
         iny
         bne @lb
-@le:    sty T0
+@le     sty T0
         lda #C_NAME
         jsr fch
         lda #38
@@ -2048,7 +2071,7 @@ edline: sta ML
         sta P2+1
         lda T1
         jsr fpath
-@k:     jsr getkey
+@k      jsr getkey
         cmp #13
         beq @ok
         cmp #LARROW
@@ -2059,7 +2082,7 @@ edline: sta ML
         beq @k
         dec EDLEN
         jmp @show
-@ch:    cmp #32
+@ch     cmp #32
         bcc @k
         cmp #LARROW
         bcs @k
@@ -2069,13 +2092,13 @@ edline: sta ML
         sta EDBUF,x
         inc EDLEN
         jmp @show
-@ok:    clc
+@ok     clc
         rts
-@cn:    sec
+@cn     sec
         rts
 
-; Ask for a number with label X/Y, default A, at most NMAX: A = the number (the default when it is not one or too big), carry set = cancelled.
-asknum: sta DEF
+; Ask for a number with label X/Y, default A, at most NMAX: A = the number (the default when it is not one or too big), carry set = canceled.
+asknum  sta DEF
         stx LBP2
         sty LBP2+1
         lda #OUTLINE
@@ -2087,13 +2110,13 @@ asknum: sta DEF
         jsr fnum
         jsr scr
         ldx #0
-@c:     cpx LBLEN
+@c      cpx LBLEN
         bcs @d
         lda LINEB,x
         sta EDBUF,x
         inx
         bne @c
-@d:     stx EDLEN
+@d      stx EDLEN
         lda #2
         ldx LBP2
         ldy LBP2+1
@@ -2104,24 +2127,24 @@ asknum: sta DEF
         cmp NMAX
         bcc @ok
         beq @ok
-@def:   lda DEF
-@ok:    clc
-@r:     rts
+@def    lda DEF
+@ok     clc
+@r      rts
 
 ; EDBUF as a number (leading spaces, then digits up to the first other character; empty = 0): A, carry set if it starts with '-'
-edval:  ldy #0
+edval   ldy #0
         lda #0
         sta V
-@s:     cpy EDLEN
+@s      cpy EDLEN
         bcs @d
         lda EDBUF,y
         cmp #' '
         bne @g
         iny
         bne @s
-@g:     cmp #'-'
+@g      cmp #'-'
         beq @bad
-@l:     cpy EDLEN
+@l      cpy EDLEN
         bcs @d
         lda EDBUF,y
         sec
@@ -2130,45 +2153,45 @@ edval:  ldy #0
         bcs @d
         sta T2
         lda V
-        asl a
-        asl a
+        asl
+        asl
         adc V
-        asl a
+        asl
         adc T2
         sta V
         iny
         bne @l
-@d:     lda V
+@d      lda V
         clc
         rts
-@bad:   sec
+@bad    sec
         rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
 ; The browser: folders and .D64/.D71/.D81 of the shown unit, from "$/folder/" listings (a listing by path leaves the mount alone).
 ; RETURN opens a folder (".." goes up) or picks an image: BR = 1 and PATHB / PATHBL its path. Left arrow: BR = 0.
-browse: lda #'/'
+browse  lda #'/'
         sta BP
         lda #1
         sta BPLN
         lda #0
         sta BR
-@new:   lda #0
+@new    lda #0
         sta BQ
         sta BW
         jsr blist
-@draw:  jsr bdraw
-@key:   jsr getkey
+@draw   jsr bdraw
+@key    jsr getkey
         cmp #LARROW
         bne @1
         rts
-@1:     cmp #145
+@1      cmp #145
         bne @2
         lda BQ
         beq @key
         dec BQ
         jmp @mv
-@2:     cmp #17
+@2      cmp #17
         bne @3
         lda BQ
         clc
@@ -2177,7 +2200,7 @@ browse: lda #'/'
         bcs @key
         sta BQ
         jmp @mv
-@3:     cmp #13
+@3      cmp #13
         bne @key
         lda BK
         beq @key
@@ -2186,8 +2209,8 @@ browse: lda #'/'
         lda BPLN
         cmp #2
         bcc @in                 ; the root has no ".."
-        ldy BPLN                 ; "..": cut at the last "/"
-@sl:    dey
+        ldy BPLN                ; "..": cut at the last "/"
+@sl     dey
         lda BP,y
         cmp #'/'
         bne @sl
@@ -2197,27 +2220,27 @@ browse: lda #'/'
         lda #1                  ; up to "/" itself
         sta BPLN
         jmp @new
-@in:    jsr mkjn
+@in     jsr mkjn
         bcs @key
         ldx BQ
         lda BTY,x
         bne @img
         ldy #0                  ; a folder: BP = PATHB
-@c:     lda PATHB,y
+@c      lda PATHB,y
         sta BP,y
         iny
         cpy PATHBL
         bcc @c
         sty BPLN
         jmp @new
-@img:   lda #1
+@img    lda #1
         sta BR
         rts
-@mv:    lda BQ
+@mv     lda BQ
         cmp BW
         bcs @m1
         sta BW
-@m1:    lda BW
+@m1     lda BW
         clc
         adc #VR
         sta T0
@@ -2227,10 +2250,10 @@ browse: lda #'/'
         sec
         sbc #VR-1
         sta BW
-@m2:    jmp @draw
+@m2     jmp @draw
 
 ; PATHB = BP + "/" + name BQ (no second "/" at the root); carry set (and a message) when longer than BPMAX
-mkjn:   lda BQ
+mkjn    lda BQ
         jsr bname
         lda BPLN
         clc
@@ -2238,7 +2261,7 @@ mkjn:   lda BQ
         cmp #BPMAX
         bcs @long
         ldy #0
-@c:     lda BP,y
+@c      lda BP,y
         sta PATHB,y
         iny
         cpy BPLN
@@ -2248,32 +2271,35 @@ mkjn:   lda BQ
         lda #'/'
         sta PATHB,y
         iny
-@r:     tya
+@r      tya
         tax
         ldy #0
-@n:     cpy SLEN
+@n      cpy SLEN
         bcs @d
         lda (P2),y
         sta PATHB,x
         inx
         iny
         bne @n
-@d:     stx PATHBL
+@d      stx PATHBL
         clc
         rts
-@long:  MSG "Path too long"
+@long   jsr msgbeg
+        jsr pstr
+        !pet "Path too long", 0
+        jsr fpad
         sec
         rts
 
 ; P2 = the name of browser entry A (16-byte slots), SLEN its length
-bname:  tax
+bname   tax
         lda BNL,x
         sta SLEN
         stx P2
         lda #0
         sta P2+1
         ldy #4
-@s:     asl P2
+@s      asl P2
         rol P2+1
         dey
         bne @s
@@ -2287,7 +2313,7 @@ bname:  tax
         rts
 
 ; read the listing of BP into BNAMES/BNL/BTY, BK entries (first ".." below the root)
-blist:  lda #0
+blist   lda #0
         sta BK
         lda BPLN
         cmp #2
@@ -2304,7 +2330,9 @@ blist:  lda #0
         lda #0
         sta BTY
         inc BK
-@o:     CMDS "$"
+@o      jsr cmdbeg
+        jsr pstr
+        !tx "$", 0
         lda #<BP
         sta P2
         lda #>BP
@@ -2318,7 +2346,7 @@ blist:  lda #0
         beq @s
         lda #'/'
         jsr fch
-@s:     jsr scr
+@s      jsr scr
         jsr fopen               ; in blocks when the drive answers that
         bcc @go
         lda ENUM
@@ -2330,19 +2358,20 @@ blist:  lda #0
         jsr rdel
         lda ENUM
         beq @rd
-@cant:  lda #1
+@cant   lda #1
         jsr CLOSE
         jsr msgbeg
-        PS "Cannot list: "
+        jsr pstr
+        !pet "Cannot list: ", 0
         jsr pemsg
         jmp fpad
-@rd:    ldx #1
+@rd     ldx #1
         jsr CHKIN
-@go:    lda #0
+@go     lda #0
         sta STATUS
         jsr rdb                 ; load address
         jsr rdb
-@line:  jsr rdb                 ; link
+@line   jsr rdb                 ; link
         sta T0
         jsr rdb
         ora T0
@@ -2356,7 +2385,7 @@ blist:  lda #0
         jsr rdb
         lda #0
         sta LLEN
-@ch:    jsr rdb
+@ch     jsr rdb
         sta CH
         lda STATUS
         sta RS
@@ -2369,24 +2398,24 @@ blist:  lda #0
         bcs @nx
         sta LINE,y
         inc LLEN
-@nx:    lda RS
+@nx     lda RS
         and #$40
         beq @ch
-@eol:   jsr bentry
+@eol    jsr bentry
         lda RS
         and #$40
         beq @line
-@end:   jsr CLRCHN
+@end    jsr CLRCHN
         lda #1
         jmp CLOSE
 
 ; one listing line in LINE/LLEN: the name between the first two quotes (trailing spaces off), kept when the type after it is DIR/D64/D71/D81
-bentry: ldy LLEN
+bentry  ldy LLEN
         lda #0
         sta LINE,y
         sta Q1
         ldy #0
-@q:     cpy LLEN
+@q      cpy LLEN
         bcs @no
         lda LINE,y
         iny
@@ -2396,13 +2425,13 @@ bentry: ldy LLEN
         bne @two
         sty Q1                  ; the name starts here
         jmp @q
-@two:   dey
+@two    dey
         sty Q2                  ; the closing quote
         tya
         sec
         sbc Q1
         sta NLN
-@tr:    lda NLN
+@tr     lda NLN
         beq @ty
         clc
         adc Q1
@@ -2412,17 +2441,17 @@ bentry: ldy LLEN
         bne @ty
         dec NLN
         jmp @tr
-@ty:    ldy Q2
+@ty     ldy Q2
         iny
-@sp:    lda LINE,y
+@sp     lda LINE,y
         cmp #' '
         bne @t0
         iny
         bne @sp
-@t0:    sty T0
+@t0     sty T0
         ldx #0
         stx T1
-@tc:    ldy T0
+@tc     ldy T0
         lda LINE,y
         cmp types,x
         bne @tn
@@ -2432,14 +2461,14 @@ bentry: ldy LLEN
         lda LINE+2,y
         cmp types+2,x
         beq @hit
-@tn:    inc T1
+@tn     inc T1
         inx
         inx
         inx
         cpx #12
         bcc @tc
-@no:    rts
-@hit:   lda BK
+@no     rts
+@hit    lda BK
         cmp #MAXB
         bcs @no
         jsr bname
@@ -2450,10 +2479,10 @@ bentry: ldy LLEN
         cmp #17
         bcc @l
         lda #16
-@l:     sta BNL,x
+@l      sta BNL,x
         sta SLEN
         ldy #0
-@cp:    cpy SLEN
+@cp     cpy SLEN
         bcs @d
         tya
         clc
@@ -2463,15 +2492,16 @@ bentry: ldy LLEN
         sta (P2),y
         iny
         bne @cp
-@d:     inc BK
+@d      inc BK
         rts
 
-types:  .byte "DIRD64D71D81"
+types   !tx "DIRD64D71D81"
 
 ; the browser screen: row 3 the folder, 4-19 the entries, 21 the keys
-bdraw:  ldx #3
+bdraw   ldx #3
         jsr rowbeg
-        PS C_SRC, "Browse: ", C_NAME
+        jsr pstr
+        !pet C_SRC, "Browse: ", C_NAME, 0
         lda #<BP
         sta P2
         lda #>BP
@@ -2482,7 +2512,7 @@ bdraw:  ldx #3
         jsr fpad
         lda #0
         sta R
-@r:     lda BW
+@r      lda BW
         clc
         adc R
         sta KK
@@ -2496,32 +2526,35 @@ bdraw:  ldx #3
         bcc @e
         jsr fpad
         jmp @nx
-@e:     lda #255
+@e      lda #255
         sta FLDN
-        PS C_OPT
+        jsr pstr
+        !pet C_OPT, 0
         lda #' '
         ldx KK
         cpx BQ
         bne @c
         lda #'>'
-@c:     jsr fch
-        PS C_NAME
+@c      jsr fch
+        jsr pstr
+        !pet C_NAME, 0
         lda KK
         cmp BQ
         bne @n
         lda #18
         jsr fch
-@n:     lda KK
+@n      lda KK
         jsr bname
         lda #17
         jsr ffield
         lda #255
         sta FLDN
-        PS 146, C_SRC, " "
+        jsr pstr
+        !pet 146, C_SRC, " ", 0
         ldx KK
         lda BTY,x
         sta T0
-        asl a
+        asl
         adc T0
         tax
         lda types,x
@@ -2533,14 +2566,17 @@ bdraw:  ldx #3
         lda #17
         sta FLDN
         jsr fpad
-@nx:    inc R
+@nx     inc R
         lda R
         cmp #VR
         bcs @h
         jmp @r
-@h:     ldx #21
+@h      ldx #21
         jsr rowbeg
-        KEYS "Return", " Open/Select  ", LARROW, " Cancel"
+        jsr pstr
+        !by 18, C_OPT : !pet "Return" : !by 146, C_SRC : !pet " Open/Select  "
+        !by 18, C_OPT : !pet LARROW : !by 146, C_SRC : !pet " Cancel"
+        !by 0
         jsr fpad
         ldx #22
         jsr rowbeg
@@ -2550,117 +2586,132 @@ bdraw:  ldx #3
         jmp fpad
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
-.segment "MRT"
-MRTEND:
-MRTABN = MRTEND - MRTAB
-.assert MRTABN < 256, error, "MRTAB too long for findmb"
+; per +mr: the operand's address, the register's offset; in source order (findmb points each at the registers found)
+MRTAB   !wo mr_dv : !by DEV0REG - MBXK
+        !wo mr_q0 : !by MBXCMD - MBXK
+        !wo mr_q1 : !by MBXSTAT - MBXK
+        !wo mr_q2 : !by MBXSTAT - MBXK
+        !wo mr_sc : !by MBXARG - MBXK
+        !wo mr_m0 : !by MBXCMD - MBXK
+        !wo mr_m1 : !by MBXSTAT - MBXK
+        !wo mr_m2 : !by MBXST - MBXK
+        !wo mr_m3 : !by MBXST - MBXK
+        !wo mr_m4 : !by MBXDATA - MBXK
+        !wo mr_m5 : !by MBXDATA - MBXK
+        !wo mr_f0 : !by MBXLEN - MBXK
+        !wo mr_f1 : !by MBXARG - MBXK
+MRTABN  = * - MRTAB
+!if MRTABN <> mrt_n * 3 { !error "MRTAB lists ", MRTABN / 3, " operands, +mr marked ", mrt_n }
+!if MRTABN >= 256 { !error "MRTAB too long for findmb" }
 
-.segment "BSS"
-TXT:    .res 4096               ; the file ($2200, page aligned: putc checks pages)
-NEWB:   .res 4096               ; the file being rebuilt
-MPB:    .res 256                ; the mounted images, 128 bytes per unit (page aligned: mpptr adds 128 to the low byte)
-.assert <TXT = 0 && <NEWB = 0 && <MPB = 0, error, "TXT, NEWB and MPB must be page aligned"
-BNAMES: .res MAXB*16
-BNL:    .res MAXB
-BTY:    .res MAXB
-LSL:    .res MAXL
-LSH:    .res MAXL
-LLN:    .res MAXL
-EPL:    .res MAXE
-EPH:    .res MAXE
-ELN:    .res MAXE
-EC:     .res MAXE
-EF:     .res MAXE
-EX:     .res MAXE
-BP:     .res BPMAX+1
-PATHB:  .res 256
-EDBUF:  .res 257
-LINEB:  .res 256
-CMD:    .res 256
-LINE:   .res 64
-ERRBUF: .res 48
-DIGS:   .res 3
-DEVS:   .res 2
-AGENT:  .res 1                  ; $80: the agent's registers (findmb)
-MRLO:   .res 1
-MRHI:   .res 1
-SDV:    .res 1                  ; agscan: the number being probed
-MPL:    .res 2
-TLEN:   .res 2
-TEND:   .res 2
-LS0:    .res 2
-CNT:    .res 2
-V:      .res 2
-N1:     .res 2
-LBP:    .res 2
-LBP2:   .res 2
-OUTM:   .res 1
-FLDN:   .res 1
-FCH:    .res 1
-FX:     .res 1
-FY:     .res 1
-NW:     .res 1
-ND:     .res 1
-SLEN:   .res 1
-SLEN2:  .res 1
-LBLEN:  .res 1
-CMDLEN: .res 1
-OC:     .res 1
-OB:     .res 1
-OT:     .res 1
-UN:     .res 1
-U:      .res 1
-UOFS:   .res 1
-DV:     .res 1
-EL:     .res 1
-NL:     .res 1
-NLC:    .res 1
-NE:     .res 1
-LI:     .res 1
-LLEN:   .res 1
-LIMHI:  .res 1
-CH:     .res 1
-RS:     .res 1
-EI:     .res 1
-ERRLEN: .res 1
-ENUM:   .res 1
-TMP:    .res 1
-IX:     .res 1
-CU:     .res 1
-TP:     .res 1
-KK:     .res 1
-R:      .res 1
-PC:     .res 1
-PF:     .res 1
-CI:     .res 1
-T0:     .res 1
-T1:     .res 1
-T2:     .res 1
-T3:     .res 1
-T4:     .res 1
-OPK:    .res 1
-OPA:    .res 1
-OPB:    .res 1
-OVF:    .res 1
-ML:     .res 1
-DEF:    .res 1
-NMAX:   .res 1
-EDLEN:  .res 1
-PATHBL: .res 1
-BPLN:    .res 1
-BQ:     .res 1
-BW:     .res 1
-BK:     .res 1
-BR:     .res 1
-Q1:     .res 1
-Q2:     .res 1
-NLN:    .res 1
-FAST:   .res 1              ; $80: the listing comes from fget
-FI:     .res 1              ; fget: next byte in the window,
-FN:     .res 1              ; bytes in it,
-FEND:   .res 1              ; $40 once the last block came
-FGX:    .res 1
-MST:    .res 1              ; mcall: the answer's ST
-MW0:    .res 1
-MW1:    .res 1
-THN:    .res 7              ; the colours being read (THEME takes them when all seven came)
+!if * > $2200 { !error "the program runs into its BSS at $2200" }
+; BSS from $2200: labels only, not part of the PRG
+TXT     = $2200                 ; the file ($2200, page aligned: putc checks pages)
+NEWB    = TXT + 4096            ; the file being rebuilt
+MPB     = NEWB + 4096           ; the mounted images, 128 bytes per unit (page aligned: mpptr adds 128 to the low byte)
+!if ((<TXT) | (<NEWB) | (<MPB)) <> 0 { !error "TXT, NEWB and MPB must be page aligned" }
+BNAMES  = MPB + 256
+BNL     = BNAMES + (MAXB*16)
+BTY     = BNL + MAXB
+LSL     = BTY + MAXB
+LSH     = LSL + MAXL
+LLN     = LSH + MAXL
+EPL     = LLN + MAXL
+EPH     = EPL + MAXE
+ELN     = EPH + MAXE
+EC      = ELN + MAXE
+EF      = EC + MAXE
+EX      = EF + MAXE
+BP      = EX + MAXE
+PATHB   = BP + (BPMAX+1)
+EDBUF   = PATHB + 256
+LINEB   = EDBUF + 257
+CMD     = LINEB + 256
+LINE    = CMD + 256
+ERRBUF  = LINE + 64
+DIGS    = ERRBUF + 48
+DEVS    = DIGS + 3
+AGENT   = DEVS + 2              ; $80: the agent's registers (findmb)
+MRLO    = AGENT + 1
+MRHI    = MRLO + 1
+SDV     = MRHI + 1              ; agscan: the number being probed
+MPL     = SDV + 1
+TLEN    = MPL + 2
+TEND    = TLEN + 2
+LS0     = TEND + 2
+CNT     = LS0 + 2
+V       = CNT + 2
+N1      = V + 2
+LBP     = N1 + 2
+LBP2    = LBP + 2
+OUTM    = LBP2 + 2
+FLDN    = OUTM + 1
+FCH     = FLDN + 1
+FX      = FCH + 1
+FY      = FX + 1
+NW      = FY + 1
+ND      = NW + 1
+SLEN    = ND + 1
+SLEN2   = SLEN + 1
+LBLEN   = SLEN2 + 1
+CMDLEN  = LBLEN + 1
+OC      = CMDLEN + 1
+OB      = OC + 1
+OT      = OB + 1
+UN      = OT + 1
+U       = UN + 1
+UOFS    = U + 1
+DV      = UOFS + 1
+EL      = DV + 1
+NL      = EL + 1
+NLC     = NL + 1
+NE      = NLC + 1
+LI      = NE + 1
+LLEN    = LI + 1
+LIMHI   = LLEN + 1
+CH      = LIMHI + 1
+RS      = CH + 1
+EI      = RS + 1
+ERRLEN  = EI + 1
+ENUM    = ERRLEN + 1
+TMP     = ENUM + 1
+IX      = TMP + 1
+CU      = IX + 1
+TP      = CU + 1
+KK      = TP + 1
+R       = KK + 1
+PC      = R + 1
+PF      = PC + 1
+CI      = PF + 1
+T0      = CI + 1
+T1      = T0 + 1
+T2      = T1 + 1
+T3      = T2 + 1
+T4      = T3 + 1
+OPK     = T4 + 1
+OPA     = OPK + 1
+OPB     = OPA + 1
+OVF     = OPB + 1
+ML      = OVF + 1
+DEF     = ML + 1
+NMAX    = DEF + 1
+EDLEN   = NMAX + 1
+PATHBL  = EDLEN + 1
+BPLN    = PATHBL + 1
+BQ      = BPLN + 1
+BW      = BQ + 1
+BK      = BW + 1
+BR      = BK + 1
+Q1      = BR + 1
+Q2      = Q1 + 1
+NLN     = Q2 + 1
+FAST    = NLN + 1               ; $80: the listing comes from fget
+FI      = FAST + 1              ; fget: next byte in the window,
+FN      = FI + 1                ; bytes in it,
+FEND    = FN + 1                ; $40 once the last block came
+FGX     = FEND + 1
+MST     = FGX + 1               ; mcall: the answer's ST
+MW0     = MST + 1
+MW1     = MW0 + 1
+THN     = MW1 + 1               ; the colors being read (THEME takes them when all seven came)
+!if THN + 7 > $5200 { !error "the BSS ends at $51FF" }

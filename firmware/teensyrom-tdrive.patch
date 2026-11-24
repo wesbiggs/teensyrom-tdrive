@@ -122,6 +122,2748 @@ index 53998d0..9614812 100644
  smcSkipPrintRunning:
     lda #0    ;set to non-zero to skip printing MsgRunning
     bne +
+diff --git a/Source/C64/README.md b/Source/C64/README.md
+index 767293c..8944da9 100644
+--- a/Source/C64/README.md
++++ b/Source/C64/README.md
+@@ -48,6 +48,7 @@ What gets built, and how, is `tools/c64-projects.json`; the format is described
+ | `TRHelpScreens` | Help screens displayed from the TeensyROM menu |
+ | `TRExtPortCheck` | External port check utility |
+ | `ExpansionPortTest` | Expansion (cartridge) port test utility (TR+ only) |
++| `TDriveConfig` | TDrive Config: edits the Alt-button disk lists and the mounted images (TR menu, TDrive Special IOs). Its source is teensyrom-tdrive's `util/tdconfig.asm`, copied unchanged by that repository's `tools/make_tr_patch.sh` |
+ | `C128PrgBoot` | C128 function ROM that streams a $1C01 BASIC program in and runs it in C128 mode |
+ | `ASIDPlayer` | ASID (MIDI SID) player application |
+ | `MIDI2SID` | MIDI-to-SID synthesizer application |
+diff --git a/Source/C64/TDriveConfig/.gitignore b/Source/C64/TDriveConfig/.gitignore
+new file mode 100644
+index 0000000..a007fea
+--- /dev/null
++++ b/Source/C64/TDriveConfig/.gitignore
+@@ -0,0 +1 @@
++build/*
+diff --git a/Source/C64/TDriveConfig/tdconfig.asm b/Source/C64/TDriveConfig/tdconfig.asm
+new file mode 100644
+index 0000000..6f5d759
+--- /dev/null
++++ b/Source/C64/TDriveConfig/tdconfig.asm
+@@ -0,0 +1,2717 @@
++; TDrive Config (ACME 0.97). The one source: teensyrom-tdrive's tools/make_util.py assembles it for the tests and the test disk, and
++; tools/make_tr_patch.sh copies it unchanged into the TeensyROM tree (Source/C64/TDriveConfig/tdconfig.asm), whose tools/build-c64.mjs
++; builds the menu's tdconfig.prg.h from it. Until 0.9.0.77 it was util/tdconfig.s (ca65; util/vdconfig.s before 0.9.0.75); this port assembled to the same bytes.
++; The ca65 macros are expanded at each use: PS is "jsr pstr" and a !pet line ending in 0, MSG wraps that in msgbeg/fpad, KEYS prints
++; each key as 18, C_OPT, key, 146, C_SRC, text, and CMDS is cmdbeg plus pstr with a !tx string. MREG stays a macro (+mr, below).
++; TDrive Config: edit the Alt-button disk lists (/tdrive-config.txt on each unit) and show / change the mounted images, entirely in machine code.
++; Loads at $0801 with a BASIC "10 SYS 2061" stub. Talks to the drives only through the KERNAL: the "!CONFIG[,W]" and "!STATE" host text
++; channels (docs/DESIGN.md 23), "$/folder/" listings for the browser and "CD:" on the command channel (logical file 15 for the SD unit, 14 for
++; the USB unit, open for the whole run: closing a command channel closes every channel of its unit). Mailbox accesses of its own: the
++; browser's block listings (FLOAD_OPEN / FLOAD_BLK), the return to the TR menu (VIO_MENU, on Q) and, under the agent, the bus scan.
++; Two register layouts (findmb): the TR+ KERNAL build's at IO1 $DE10, the TDrive agent's (plain TR; "TDrive Agent" on the TR+) at IO2
++; $DF00, where IO1 holds the agent's code. Each is told by its ID bytes; the code is assembled for $DE10 and every register operand
++; is pointed at the one found (+mr, the MRTAB table) before the first access. Nothing is written to either without the IDs.
++; The file is kept as text in TXT (each line ends in CR) with an index of its lines; every change rebuilds the text in NEWB (one line replaced,
++; removed, swapped or added), copies it back, re-indexes and re-parses the entries, then writes the whole file. Lines that are not entries
++; (comments, blank lines) stay where they are.
++; Buffers and tables are BSS at $2200-$51FF (not in the PRG). The screen is in the lower-case character set: !pet swaps the case of the
++; letters in its strings for that set, strings for the drive (!tx: CMDS, types) are as they are.
++; Colors follow the TR menu: its seven color references (background, border, banner, time, option, sources, name) come as the third
++; line of "!STATE" (hex digits; the menu's defaults when a firmware sends no such line). Bytes C_BAN..C_NAME in a screen string select
++; one (fch sets the text color from THEME). As in the menu: a reverse banner, keys in reverse in the option color, their descriptions and
++; labels in the sources color, paths and names in the name color, messages in the time color.
++!cpu 6502
++
++SETLFS  = $FFBA
++SETNAM  = $FFBD
++OPEN    = $FFC0
++CLOSE   = $FFC3
++CHKIN   = $FFC6
++CHKOUT  = $FFC9
++CLRCHN  = $FFCC
++CHRIN   = $FFCF
++CHROUT  = $FFD2
++GETIN   = $FFE4
++PLOT    = $FFF0
++LISTEN  = $FFB1
++SECOND  = $FF93
++UNLSN   = $FFAE
++STATUS  = $90
++QTSW    = $D4                   ; quote mode of the screen editor: a '"' in a path must not turn the control codes after it into characters
++INSRT   = $D8                   ; insert count, likewise
++BORDER  = $D020
++BGCOL   = $D021
++TXTCOL  = $0286
++MBXK    = $DE10                 ; tdrive mailbox (d64/tdrive_io.h) of the KERNAL build; the agent's is MBXA. Operands assembled for MBXK
++MBXA    = $DF00                 ;   carry +mr, which records them for findmb
++MBXCMD  = MBXK+0                ; command register ...
++MBXARG  = MBXK+1                ; argument (the device for the fast open, a free number for VIO_FREE)
++MBXDATA = MBXK+2                ; result byte (the fast open's error, a block's byte count)
++MBXSTAT = MBXK+3                ; ... and its answer token
++MBXST   = MBXK+4                ; IEC status bits of the answer ($40 EOI: the last block)
++MBXLEN  = MBXK+5                ; name length for the fast open
++DEV0REG = MBXK+6                ; current device number of the SD unit, +7 the USB unit (0 = none)
++MBXID0  = 9                     ; ID registers (offsets): $D6 $64 while a TDrive handler answers
++MBXID1  = 10
++WIN     = $DF80                 ; the 128-byte IO2 window: the name out, the blocks in
++WINSZ   = 128
++C_FLOPEN = 9                    ; FLOAD_OPEN / FLOAD_BLK: the fast LOAD's block transfer (d64/tdrive_io.h), used for the browser's listings
++C_FLBLK = 10
++STAT_NOTMINE = $A5
++STAT_SCAN = $3C
++VIO_MENU = 16                   ; command: back to the TR menu (the Teensy resets the C64 into it)
++VIO_SCAN = 14                   ; command: the bus scan starts (the automatic units let go of their numbers); DATA = units that need one
++VIO_FREE = 15                   ; command: nobody answered at ARG; DATA = units still waiting
++STAT_OK = $5A                   ; answer token: done
++
++P1      = $FB                   ; inline strings
++P2      = $FD                   ; the string being printed, parsed or compared
++P3      = $22                   ; write pointer; $22-$25 are BASIC's scratch pointers, unused while this runs
++P4      = $24                   ; read pointer
++
++MAXL    = 119                   ; lines kept from the file
++MAXE    = 32                    ; list entries (what the firmware reads)
++MAXB    = 100                   ; browser entries
++SAVEMAX = 2000                  ; bytes of the file the firmware reads
++VR      = 16                    ; list rows on the screen (rows 4-19)
++BPMAX   = 200                   ; browser path
++CURSOR  = $A4                   ; the line editor's cursor (an underscore)
++LARROW  = 95                    ; left arrow: cancel; "CD:<-" unmounts
++OUTSCR  = 0                     ; OUTM: where fch sends characters
++OUTLINE = 1
++OUTCMD  = 2
++C_BAN   = 3                     ; screen string bytes 1-7: color reference 0-6 of the TR menu (THEME); only these five are used for text
++C_TIME  = 4
++C_OPT   = 5
++C_SRC   = 6
++C_NAME  = 7
++
++; +mr ~name in front of an instruction whose operand is a mailbox register (MBXK+n): name = the operand's address, which MRTAB at the
++; end must list with the register's offset (in the order of the source, as ca65's MRT segment had them). The count is checked there.
++!set mrt_n = 0
++!macro mr ~.at {
++        .at = * + 1
++        !set mrt_n = mrt_n + 1
++}
++
++* = $0801
++        !wo @next
++        !wo 10
++        !tx $9E, "2061", 0
++@next   !wo 0
++
++start
++!if start <> 2061 { !error "the SYS address in the BASIC stub must match" }
++        jsr scr
++        jsr pstr                ; the lower-case character set, and Shift+C= may not switch it back
++        !pet 14, 8, 0
++        jsr pstr
++        !pet "Reading config...", 13, 0
++        jsr findmb              ; which TDrive handler answers, if any
++        bcs @no2
++        bit AGENT
++        bpl @nos
++        jsr agscan              ; the agent's numbers are settled by a bus scan here (the TR+'s menu probes before the launch)
++@nos    ldx #1
++@dv     +mr ~mr_dv : lda DEV0REG,x
++        cmp #8
++        bcc @no
++        cmp #31
++        bcc @ok
++@no     lda #0
++@ok     sta DEVS,x
++        dex
++        bpl @dv
++        lda DEVS
++        ora DEVS+1
++        bne @act
++@no2    lda #255
++        sta FLDN
++        jsr pstr
++        !pet "TDrive is not active.", 13, "Start this program from the TeensyROM menu with a TDrive Special IO.", 13, 0
++        rts
++@act    lda BORDER
++        and #15
++        sta OC
++        lda BGCOL
++        and #15
++        sta OB
++        lda TXTCOL
++        and #15
++        sta OT
++        lda DEVS
++        beq @o1
++        tax
++        lda #15
++        ldy #15
++        jsr openc
++@o1     lda DEVS+1
++        beq @o2
++        tax
++        lda #14
++        ldy #15
++        jsr openc
++@o2     lda #0
++        sta UN
++        lda DEVS
++        bne @u
++        inc UN                  ; no SD unit: start on the USB list
++@u      jsr setunit
++        jsr readstate
++        lda THEME+1             ; the menu's border and background
++        sta BORDER
++        lda THEME
++        sta BGCOL
++        jsr readcfg
++        lda #0
++        sta CU
++        sta TP
++        jsr drawall
++        jsr msgbeg
++        jsr pstr
++        !pet "Ready. Alt: 1 tap = SD, 2 taps = USB", 0
++        jsr fpad
++main    jsr getkey
++        cmp #'Q'
++        beq quit
++        ldx #NKEYS-1
++@f      cmp keytab,x
++        beq @go
++        dex
++        bpl @f
++        bmi main
++@go     jsr @call
++        jmp main
++@call   lda keyhi,x
++        pha
++        lda keylo,x
++        pha
++        rts
++
++keytab  !by 145, 17, 13, 'B', 'U', 'A', 'E', 'D', '+', '-', 'T', 'R'
++NKEYS = * - keytab
++keylo   !by <(k_up-1), <(k_down-1), <(k_ret-1), <(k_brow-1), <(k_unm-1), <(k_add-1), <(k_edit-1), <(k_del-1), <(k_plus-1), <(k_minus-1), <(k_tog-1), <(k_ref-1)
++keyhi   !by >(k_up-1), >(k_down-1), >(k_ret-1), >(k_brow-1), >(k_unm-1), >(k_add-1), >(k_edit-1), >(k_del-1), >(k_plus-1), >(k_minus-1), >(k_tog-1), >(k_ref-1)
++
++; Q: back to the TR menu. The Teensy answers the mailbox command, writes back what is unsaved and resets the C64 into its menu; if
++; nothing answers (or no reset comes) this returns to BASIC instead.
++quit    lda #15
++        jsr CLOSE
++        lda #14
++        jsr CLOSE
++        jsr CLRCHN
++        sei                     ; nothing from the KERNAL while the Teensy writes to the card
++        lda #VIO_MENU
++        +mr ~mr_q0 : sta MBXCMD
++        ldx #0
++        ldy #0
++@w      +mr ~mr_q1 : lda MBXSTAT ; BUSY until answered; read twice, as the KERNAL does (a late answer gives a mixed byte)
++        cmp #STAT_OK
++        bne @n
++        +mr ~mr_q2 : cmp MBXSTAT
++        beq @ok
++@n      dex
++        bne @w
++        dey
++        bne @w
++        beq @bas                ; not answered in about a second
++@ok     lda #4                  ; answered: the reset comes within a few ms; give it about 4 s
++        sta T0
++@r      dex
++        bne @r
++        dey
++        bne @r
++        dec T0
++        bne @r
++@bas    cli
++        lda OC
++        sta BORDER
++        lda OB
++        sta BGCOL
++        lda OT
++        sta TXTCOL
++        lda #255
++        sta FLDN
++        jsr pstr
++        !tx 147, 142, 9, 154, "BYE", 0 ; upper case again for BASIC
++        rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; open logical file A on device X, secondary Y, without a name (the command channel)
++openc   jsr SETLFS
++        lda #0
++        jsr SETNAM
++        jmp OPEN
++
++; open logical file A on device X, secondary Y, with the name in CMD (CMDLEN bytes)
++openn   jsr SETLFS
++        lda CMDLEN
++        ldx #<CMD
++        ldy #>CMD
++        jsr SETNAM
++        jmp OPEN
++
++; wait for a key
++getkey  jsr GETIN
++        beq getkey
++        rts
++
++; DV / EL: device and command channel of the unit whose list is shown
++setunit ldx UN
++        lda DEVS,x
++        sta DV
++        lda #15
++        cpx #0
++        beq @s
++        lda #14
++@s      sta EL
++        rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; Output. Everything goes through fch, which sends to the screen, to LINEB or to CMD (OUTM). On the screen, printable characters
++; count down FLDN and are dropped at 0 (a field of fixed width, padded by fpad); control codes always go out.
++
++; one character; keeps A, X, Y
++fch     sta FCH
++        stx FX
++        sty FY
++        ldx OUTM
++        bne @buf
++        cmp #C_NAME+1
++        bcs @ch
++        tax
++        beq @ch
++        lda THEME-1,x           ; 1-7: a color reference
++        sta TXTCOL
++        jmp @r
++@ch     and #$7F
++        cmp #$20
++        bcc @out
++        lda FLDN
++        beq @r
++        dec FLDN
++@out    lda FCH
++        jsr CHROUT
++        lda #0
++        sta QTSW
++        sta INSRT
++        beq @r
++@buf    dex
++        bne @cmd
++        ldx LBLEN
++        cpx #255
++        bcs @r
++        lda FCH
++        sta LINEB,x
++        inc LBLEN
++        bne @r
++@cmd    ldx CMDLEN
++        cpx #255
++        bcs @r
++        lda FCH
++        sta CMD,x
++        inc CMDLEN
++@r      ldx FX
++        ldy FY
++        lda FCH
++        rts
++
++scr     lda #OUTSCR
++        sta OUTM
++        rts
++
++cmdbeg  lda #OUTCMD
++        sta OUTM
++        lda #0
++        sta CMDLEN
++        rts
++
++; fch with a letter $41-$5A shown in upper case (lower-case character set): the types from the listing
++fchu    cmp #'A'
++        bcc @f
++        cmp #'Z'+1
++        bcs @f
++        ora #$80
++@f      jmp fch
++
++; spaces up to the end of the field
++fpad    lda FLDN
++        beq @d
++        lda #' '
++        jsr fch
++        jmp fpad
++@d      rts
++
++; print the string that follows the JSR (zero terminated)
++pstr    pla
++        sta P1
++        pla
++        sta P1+1
++        ldy #1
++@l      lda (P1),y
++        beq @d
++        jsr fch
++        iny
++        bne @l
++@d      tya
++        clc
++        adc P1
++        tax
++        lda P1+1
++        adc #0
++        pha
++        txa
++        pha
++        rts
++
++; A in decimal, right justified in X columns (0 = no padding)
++fnum    stx NW
++        ldx #0
++@l      ldy #0
++@s      cmp #10
++        bcc @r
++        sbc #10
++        iny
++        bne @s
++@r      ora #'0'
++        sta DIGS,x
++        inx
++        tya
++        bne @l
++        stx ND
++        lda NW
++        sec
++        sbc ND
++        bcc @o
++        beq @o
++        tay
++@p      lda #' '
++        jsr fch
++        dey
++        bne @p
++@o      ldx ND
++@q      lda DIGS-1,x
++        jsr fch
++        dex
++        bne @q
++        rts
++
++; the SLEN characters at (P2), from index 0 / from index Y
++fmem    ldy #0
++fmemy   cpy SLEN
++        bcs @d
++        lda (P2),y
++        jsr fch
++        iny
++        bne fmemy
++@d      rts
++
++; (P2)/SLEN in a field of A columns
++ffield  sta FLDN
++        jsr fmem
++        jmp fpad
++
++; (P2)/SLEN in a field of A columns; when it is longer, ".." and its last A-2 characters
++fpath   sta FLDN
++        cmp SLEN
++        bcs @all
++        lda #'.'
++        jsr fch
++        jsr fch
++        lda SLEN
++        sec
++        sbc FLDN
++        tay
++        jsr fmemy
++        jmp fpad
++@all    jsr fmem
++        jmp fpad
++
++; cursor to row X, column 0
++atrow   ldy #0
++        clc
++        jmp PLOT
++
++; cursor to row X, a field of 39 columns
++rowbeg  jsr atrow
++        lda #39
++        sta FLDN
++        rts
++
++msgbeg  jsr scr
++        ldx #20
++        jsr rowbeg
++        lda #C_TIME
++        jmp fch
++
++; "ERROR nn,message" on row 20
++perr    jsr msgbeg
++        jsr pstr
++        !pet "Error ", 0
++        lda ENUM
++        ldx #0
++        jsr fnum
++        jsr pstr
++        !pet ",", 0
++        jsr pemsg
++        jmp fpad
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; ---------------------------------------------------------------------------------------------------------------------------------
++; Listings in blocks. A folder listing read with CHRIN costs one mailbox round trip per byte, which a folder of many files makes slow.
++; The KERNAL's fast LOAD reads files 128 bytes per round trip through the IO2 window (FLOAD_OPEN, then FLOAD_BLK until EOI); the
++; browser asks for its listings the same way (fopen / fget) and falls back to OPEN + CHRIN when that is not answered.
++
++; Which registers: the KERNAL build's ($DE10) when $DE19/$DE1A read $D6 $64, else the agent's ($DF00) when $DF09/$DF0A do. Reads only
++; until then: under the agent IO1 is its code (the handler keeps writes there), under the TR menu's own handler $DE11 / $DE15 are
++; EEPROM-backed settings. A few tries, as the KERNAL's td_here does (a late answer reads a mixed byte).
++; C=0 found: every +mr operand points at it, AGENT = $80 for the agent's, else 0. C=1: no TDrive handler.
++findmb  ldx #4
++@try    lda MBXK+MBXID0
++        cmp #$D6
++        bne @a
++        lda MBXK+MBXID1
++        cmp #$64
++        bne @a
++        lda #<MBXK
++        ldx #>MBXK
++        ldy #0
++        beq @set
++@a      lda MBXA+MBXID0
++        cmp #$D6
++        bne @n
++        lda MBXA+MBXID1
++        cmp #$64
++        bne @n
++        lda #<MBXA
++        ldx #>MBXA
++        ldy #$80
++        bne @set
++@n      dex
++        bne @try
++        sec
++        rts
++@set    sty AGENT
++        sta MRLO
++        stx MRHI
++        ldx #0
++@fix    cpx #MRTABN
++        beq @done
++        lda MRTAB,x             ; P2 = the operand's address
++        sta P2
++        lda MRTAB+1,x
++        sta P2+1
++        lda MRTAB+2,x           ; base + register (no carry: the registers are within the base's first 16 bytes)
++        clc
++        adc MRLO
++        ldy #0
++        sta (P2),y
++        iny
++        lda MRHI
++        sta (P2),y
++        inx
++        inx
++        inx
++        bne @fix
++@done   clc
++        rts
++
++; The agent's bus scan, as the KERNAL's bus_scan (patches/vcall.inc) does it: which numbers are free on the real serial bus, probed with
++; LISTEN + SECOND (the stock routines: the agent hooks only the vectored calls). Otherwise the agent's engine would scan at the first
++; OPEN, after this program had read DEV0/DEV1, and that OPEN could reach a real drive on the number the unit gave up.
++agscan  lda #VIO_SCAN
++        jsr mcall
++        bcs @out                ; not answered
++        cmp #0
++        beq @out                ; no unit needs a number
++        lda #8
++        sta SDV
++@p      lda #0
++        sta STATUS
++        lda SDV
++        jsr LISTEN
++        lda STATUS
++        bmi @free               ; nothing on the bus at all
++        lda #$6F
++        jsr SECOND
++        lda STATUS
++        bmi @free
++        jsr UNLSN               ; a real device is there
++@nx     inc SDV
++        lda SDV
++        cmp #31
++        bcc @p
++@out    lda #0
++        sta STATUS
++        rts
++@free   lda SDV
++        +mr ~mr_sc : sta MBXARG
++        lda #VIO_FREE
++        jsr mcall
++        bcs @out
++        cmp #0
++        bne @nx                 ; a unit still needs a number
++        beq @out
++
++; one mailbox command A: C=0 answered (A = DATA, MST = ST), C=1 not (not mine, a bus-scan request, or no answer in about a second)
++mcall   +mr ~mr_m0 : sta MBXCMD
++        lda #0
++        sta MW0
++        sta MW1
++@w      +mr ~mr_m1 : lda MBXSTAT
++        cmp #STAT_OK
++        beq @ok
++        cmp #STAT_NOTMINE
++        beq @no
++        cmp #STAT_SCAN
++        beq @no
++        inc MW0
++        bne @w
++        inc MW1
++        bne @w
++@no     sec
++        rts
++@ok     +mr ~mr_m2 : lda MBXST  ; each answer byte read twice in a row until two agree, as the KERNAL does
++        +mr ~mr_m3 : cmp MBXST
++        bne @ok
++        sta MST
++@d      +mr ~mr_m4 : lda MBXDATA
++        +mr ~mr_m5 : cmp MBXDATA
++        bne @d
++        clc
++        rts
++
++; open the listing named in CMD (CMDLEN bytes) on DV for fget: C=0 open; C=1 not, ENUM = the drive's error if it refused (else 0:
++; a name of 128 bytes or more, or no answer: use OPEN + CHRIN)
++fopen   lda #0
++        sta FAST
++        sta ENUM
++        ldy CMDLEN
++        bmi @no                 ; >= WINSZ: does not fit the window
++        ldy #0
++@nm     lda CMD,y               ; the name -> window, each byte read back
++        sta WIN,y
++        cmp WIN,y
++        bne @nm
++        iny
++        cpy CMDLEN
++        bne @nm
++        +mr ~mr_f0 : sty MBXLEN
++        lda DV
++        +mr ~mr_f1 : sta MBXARG
++        lda #C_FLOPEN
++        jsr mcall
++        bcs @no
++        cmp #0
++        bne @err
++        lda #2                  ; the window holds the two load address bytes: fget hands them out first, as CHRIN would
++        sta FN
++        lda #0
++        sta FI
++        sta FEND
++        lda #$80
++        sta FAST
++        clc
++        rts
++@err    jsr rdel                ; why (62 for a folder that is not there, ...)
++@no     sec
++        rts
++
++; the next byte of the listing: from the block reader after fopen, else CHRIN
++rdb     bit FAST
++        bmi fget
++        jmp CHRIN
++
++; the next byte of a listing opened by fopen, with STATUS as CHRIN from a serial file leaves it: $40 with the last byte, $42 when
++; nothing is left (a byte 0 then) or a block was not answered. X, Y kept.
++fget    stx FGX
++        ldx FI
++        cpx FN
++        bcc @have
++        lda FEND
++        bne @past               ; the last block was used up
++        lda #C_FLBLK
++        jsr mcall
++        bcs @past
++        sta FN                  ; 0..128 bytes in the window
++        lda MST
++        and #$40
++        sta FEND                ; EOI: this is the last block
++        ldx #0
++        stx FI
++        cpx FN
++        bcc @have
++@past   lda #$40
++        sta FEND
++        lda STATUS
++        ora #$42
++        sta STATUS
++        lda #0
++        ldx FGX
++        rts
++@have   lda WIN,x
++        cmp WIN,x
++        bne @have
++        inx
++        stx FI
++        cpx FN
++        bcc @out
++        pha
++        lda FEND
++        beq @more
++        lda STATUS              ; the last byte of the last block
++        ora #$40
++        sta STATUS
++@more   pla
++@out    ldx FGX
++        rts
++
++; Read the error channel of logical file A: ERRBUF = "NN,MESSAGE,TT,SS", ENUM = NN (255 = not understood).
++rdel    lda EL
++rderr   tax
++        jsr CHKIN
++        lda #0
++        sta STATUS
++        sta EI
++@l      jsr CHRIN
++        ldy EI
++        cmp #13
++        beq @e
++        sta ERRBUF,y
++        inc EI
++        lda STATUS
++        bne @e
++        lda EI
++        cmp #46
++        bcc @l
++@e      ldy EI
++        lda #0
++        sta ERRBUF,y
++        sty ERRLEN
++        jsr CLRCHN
++        lda ERRBUF
++        sec
++        sbc #'0'
++        cmp #10
++        bcs @bad
++        sta TMP
++        asl
++        asl
++        adc TMP
++        asl
++        sta TMP
++        lda ERRBUF+1
++        sec
++        sbc #'0'
++        cmp #10
++        bcs @bad
++        clc
++        adc TMP
++        sta ENUM
++        rts
++@bad    lda #255
++        sta ENUM
++        rts
++
++; the message part of the error channel text (after the first comma, without the leading spaces, up to the next comma)
++pemsg   ldy #3
++        cpy ERRLEN
++        bcs @d
++@s      lda ERRBUF,y
++        cmp #' '
++        bne @l
++        iny
++        bne @s
++@l      lda ERRBUF,y
++        beq @d
++        cmp #','
++        beq @d
++        jsr fch
++        iny
++        bne @l
++@d      rts
++
++; send CMD and a CR to the command channel of the shown unit, then read its error channel
++sendcmd jsr scr
++        ldx EL
++        jsr CHKOUT
++        lda #0
++        sta IX
++@l      ldy IX
++        cpy CMDLEN
++        bcs @e
++        lda CMD,y
++        jsr CHROUT
++        inc IX
++        bne @l
++@e      lda #13
++        jsr CHROUT
++        jsr CLRCHN
++        jmp rdel
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; MPL / MPB: the image mounted on each unit, from the first line of "!STATE" (empty when none or no unit); THEME from its third line.
++readstate
++        ldx #1
++@u      stx U
++        lda #0
++        sta MPL,x
++        cpx #0
++        beq @o
++        lda #128
++@o      sta UOFS
++        lda DEVS,x
++        bne @go
++        jmp @nx
++@go
++        jsr cmdbeg
++        jsr pstr
++        !tx "!STATE", 0
++        jsr scr
++        ldx U
++        lda DEVS,x
++        tax
++        lda #2
++        ldy #2
++        jsr openn
++        lda #15
++        ldx U
++        beq @e
++        lda #14
++@e      jsr rderr
++        lda ENUM
++        bne @cl
++        ldx #2
++        jsr CHKIN
++        lda #0
++        sta STATUS
++        sta LLEN
++@rd     jsr CHRIN
++        sta CH
++        lda STATUS
++        sta RS
++        and #$BF
++        bne @end
++        lda CH
++        cmp #13
++        beq @end
++        ldy LLEN
++        cpy #127
++        bcs @sk
++        tya
++        ora UOFS
++        tax
++        lda CH
++        sta MPB,x
++        inc LLEN
++@sk     lda RS
++        and #$40
++        beq @rd
++@end    lda RS                  ; 0: the line ended in CR with more to come
++        bne @ce
++        jsr rdtheme
++@ce     jsr CLRCHN
++        ldx U
++        lda LLEN
++        sta MPL,x
++@cl     lda #2
++        jsr CLOSE
++@nx     ldx U
++        dex
++        bmi @x
++        jmp @u
++@x      rts
++
++; the rest of "!STATE" (input from it): skip the folder line, then THEME = the NumColorRefs hex digits of the third line (all or nothing)
++rdtheme jsr CHRIN
++        sta CH
++        lda STATUS
++        bne @x
++        lda CH
++        cmp #13
++        bne rdtheme
++        lda #0
++        sta T1
++@h      jsr CHRIN
++        sta CH
++        lda STATUS
++        and #$BF
++        bne @x
++        lda CH
++        cmp #'0'
++        bcc @x
++        cmp #'9'+1
++        bcc @dg
++        cmp #'A'
++        bcc @x
++        cmp #'F'+1
++        bcs @x
++        sbc #'A'-10-1           ; carry clear: A-'A'+10
++        jmp @st
++@dg     and #15
++@st     ldx T1
++        sta THN,x
++        inx
++        stx T1
++        cpx #7
++        bcs @ok
++        lda STATUS
++        beq @h
++@x      rts
++@ok     dex
++@cp     lda THN,x
++        sta THEME,x
++        dex
++        bpl @cp
++        rts
++
++; P2 / SLEN = the image mounted on unit X
++mpptr   lda MPL,x
++        sta SLEN
++        lda #<MPB
++        cpx #0
++        beq @z
++        lda #<(MPB+128)
++@z      sta P2
++        lda #>MPB
++        sta P2+1
++        rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; Read the shown unit's "!CONFIG" into TXT: lines end in CR, 0 bytes are dropped, at most MAXL lines of 255 characters
++; (a missing file is an empty list). Then index and parse.
++readcfg lda #<TXT
++        sta P3
++        lda #>TXT
++        sta P3+1
++        lda #(>TXT)+15
++        sta LIMHI
++        lda #0
++        sta NLC
++        sta LLEN
++        jsr cmdbeg
++        jsr pstr
++        !tx "!CONFIG", 0
++        jsr scr
++        lda #2
++        ldx DV
++        ldy #2
++        jsr openn
++        jsr rdel
++        lda ENUM
++        bne @cl
++        ldx #2
++        jsr CHKIN
++        lda #0
++        sta STATUS
++@rd     jsr CHRIN
++        sta CH
++        lda STATUS
++        sta RS
++        and #$BF
++        bne @eof
++        lda CH
++        beq @nx
++        cmp #13
++        bne @c
++        jsr endl
++        jmp @nx
++@c      lda LLEN
++        cmp #255
++        bcs @nx
++        lda NLC
++        cmp #MAXL
++        bcs @nx
++        lda CH
++        jsr putc
++        bcs @nx
++        inc LLEN
++@nx     lda RS
++        and #$40
++        beq @rd
++@eof    lda LLEN
++        beq @e2
++        jsr endl                ; a last line without a CR
++@e2     jsr CLRCHN
++@cl     lda #2
++        jsr CLOSE
++        sec
++        lda P3
++        sbc #<TXT
++        sta TLEN
++        lda P3+1
++        sbc #>TXT
++        sta TLEN+1
++        jmp reindex
++
++; end a line of the file: a CR, unless MAXL lines are there already
++endl    lda #0
++        sta LLEN
++        lda NLC
++        cmp #MAXL
++        bcs @d
++        inc NLC
++        lda #13
++        ldy #0
++        sta (P3),y
++        jmp incp3
++@d      rts
++
++; A -> (P3)+ while P3 is below page LIMHI (carry set = no room; the last page is left for the CRs)
++putc    ldx P3+1
++        cpx LIMHI
++        bcs putcr
++        ldy #0
++        sta (P3),y
++incp3   inc P3
++        bne putok
++        inc P3+1
++putok   clc
++putcr   rts
++
++; LSL/LSH/LLN, NL: start and length of every line of TXT (TLEN bytes); then parse
++reindex lda #<TXT
++        sta P4
++        clc
++        adc TLEN
++        sta TEND
++        lda #>TXT
++        sta P4+1
++        adc TLEN+1
++        sta TEND+1
++        lda #0
++        sta NL
++        sta LLEN
++        jsr @mark
++@l      lda P4
++        cmp TEND
++        bne @c
++        lda P4+1
++        cmp TEND+1
++        bne @c
++        jmp parse
++@c      ldy #0
++        lda (P4),y
++        inc P4
++        bne @i
++        inc P4+1
++@i      cmp #13
++        beq @e
++        inc LLEN
++        jmp @l
++@e      ldx NL
++        cpx #MAXL
++        bcs @s
++        lda LS0
++        sta LSL,x
++        lda LS0+1
++        sta LSH,x
++        lda LLEN
++        sta LLN,x
++        inc NL
++@s      lda #0
++        sta LLEN
++        jsr @mark
++        jmp @l
++@mark   lda P4
++        sta LS0
++        lda P4+1
++        sta LS0+1
++        rts
++
++; The entries: lines that start with "/" after any spaces, "path[, color[, flashes]]"; the numbers are 1-3 digits after the last
++; commas (spaces around them allowed), color taken AND 15, flashes at most 20, both 1 when missing. NE entries of at most MAXE:
++; EPL/EPH/ELN the path (in TXT), EC, EF, EX the line.
++parse   lda #0
++        sta NE
++        sta LI
++@ln     lda LI
++        cmp NL
++        bcc @1
++        rts
++@1      lda NE
++        cmp #MAXE
++        bcc @2
++        rts
++@nxj    jmp @nx
++@2      ldx LI
++        lda LSL,x
++        sta P2
++        lda LSH,x
++        sta P2+1
++        lda LLN,x
++        sta SLEN
++        ldy #0
++@sp     cpy SLEN
++        bcs @nxj
++        lda (P2),y
++        cmp #' '
++        bne @3
++        iny
++        bne @sp
++@3      cmp #'/'
++        bne @nxj
++        sty T0                  ; the path starts here
++        tya
++        clc
++        adc P2
++        sta P2
++        bcc @4
++        inc P2+1
++@4      lda SLEN
++        sec
++        sbc T0
++        sta SLEN
++        lda #1
++        sta PC
++        sta PF
++        jsr trailnum
++        bcs @tr
++        lda V
++        sta N1
++        lda V+1
++        sta N1+1
++        jsr trailnum
++        bcc @two
++        lda N1                  ; one number: the color
++        and #15
++        sta PC
++        jmp @tr
++@two    lda V
++        and #15
++        sta PC
++        lda N1+1
++        bne @20
++        lda N1
++        cmp #21
++        bcc @f
++@20     lda #20
++@f      sta PF
++@tr     ldy SLEN                ; trailing spaces off
++        beq @st
++        dey
++        lda (P2),y
++        cmp #' '
++        bne @st
++        dec SLEN
++        jmp @tr
++@st     ldx NE
++        lda P2
++        sta EPL,x
++        lda P2+1
++        sta EPH,x
++        lda SLEN
++        sta ELN,x
++        lda PC
++        sta EC,x
++        lda PF
++        sta EF,x
++        lda LI
++        sta EX,x
++        inc NE
++@nx     inc LI
++        jmp @ln
++
++; the number after the last comma of (P2)/SLEN: V, and SLEN cut before that comma; carry set = none
++trailnum
++        ldy SLEN
++        jmp @f
++@no0    sec
++        rts
++@f      tya
++        beq @no0
++        dey
++        lda (P2),y
++        cmp #','
++        bne @f
++        sty CI
++        iny
++@s      cpy SLEN
++        bcs @no0
++        lda (P2),y
++        cmp #' '
++        bne @e0
++        iny
++        bne @s
++@e0     sty T0                  ; first non-space
++        ldy SLEN
++@e      dey
++        lda (P2),y
++        cmp #' '
++        beq @e
++        iny
++        sty T1                  ; after the last non-space
++        tya
++        sec
++        sbc T0
++        cmp #4
++        bcs @no
++        lda #0
++        sta V
++        sta V+1
++        ldy T0
++@d      lda (P2),y
++        sec
++        sbc #'0'
++        cmp #10
++        bcs @no
++        sta T2
++        lda V                   ; V = V * 10 + digit
++        sta T3
++        lda V+1
++        sta T4
++        asl V
++        rol V+1
++        asl V
++        rol V+1
++        clc
++        lda V
++        adc T3
++        sta V
++        lda V+1
++        adc T4
++        sta V+1
++        asl V
++        rol V+1
++        clc
++        lda V
++        adc T2
++        sta V
++        bcc @n
++        inc V+1
++@n      iny
++        cpy T1
++        bcc @d
++        lda CI
++        sta SLEN
++        clc
++        rts
++@no     sec
++        rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; Change the file: OPK 0 = line OPA becomes LINEB, 1 = line OPA goes, 2 = lines OPA and OPB swap, 3 = LINEB is added at the end.
++; The new text is built in NEWB and copied to TXT, then indexed and parsed. Carry set (nothing changed) when it does not fit.
++rebuild lda #<NEWB
++        sta P3
++        lda #>NEWB
++        sta P3+1
++        lda #(>NEWB)+15
++        sta LIMHI
++        lda #0
++        sta OVF
++        sta LI
++@l      lda LI
++        cmp NL
++        bcs @end
++        ldx LI
++        lda OPK
++        cmp #2
++        bne @n2
++        cpx OPA
++        bne @a
++        ldx OPB
++        jmp @cp
++@a      cpx OPB
++        bne @cp
++        ldx OPA
++        jmp @cp
++@n2     cpx OPA
++        bne @cp
++        cmp #1
++        beq @nx
++        cmp #0
++        bne @cp
++        jsr emitlb
++        jmp @nx
++@cp     jsr emitln
++@nx     inc LI
++        jmp @l
++@end    lda OPK
++        cmp #3
++        bne @ck
++        jsr emitlb
++@ck     lda OVF
++        beq @ok
++        sec
++        rts
++@ok     sec
++        lda P3
++        sbc #<NEWB
++        sta TLEN
++        lda P3+1
++        sbc #>NEWB
++        sta TLEN+1
++        lda #<NEWB
++        sta P4
++        lda #>NEWB
++        sta P4+1
++        lda #<TXT
++        sta P3
++        lda #>TXT
++        sta P3+1
++        ldx #16                 ; the whole 4 KB
++        ldy #0
++@m      lda (P4),y
++        sta (P3),y
++        iny
++        bne @m
++        inc P4+1
++        inc P3+1
++        dex
++        bne @m
++        jsr reindex
++        clc
++        rts
++
++; line X of TXT / LINEB, and a CR, to (P3)
++emitln  lda LSL,x
++        sta P4
++        lda LSH,x
++        sta P4+1
++        lda LLN,x
++        sta SLEN2
++        jmp emit
++emitlb  lda #<LINEB
++        sta P4
++        lda #>LINEB
++        sta P4+1
++        lda LBLEN
++        sta SLEN2
++emit    lda #0
++        sta IX
++@l      ldy IX
++        cpy SLEN2
++        bcs @cr
++        lda (P4),y
++        jsr putc
++        bcc @n
++        lda #1
++        sta OVF
++@n      inc IX
++        jmp @l
++@cr     lda #13
++        ldy #0
++        sta (P3),y
++        jmp incp3
++
++; LINEB = "path, color, flashes" from (P2)/SLEN, PC, PF
++mkline  lda #OUTLINE
++        sta OUTM
++        lda #0
++        sta LBLEN
++        jsr fmem
++        jsr pstr
++        !pet ", ", 0
++        lda PC
++        ldx #0
++        jsr fnum
++        jsr pstr
++        !pet ", ", 0
++        lda PF
++        ldx #0
++        jsr fnum
++        jmp scr
++
++; Write TXT to the shown unit's "!CONFIG,W" (refused over SAVEMAX bytes) and say how it went.
++save    lda TLEN+1
++        cmp #>(SAVEMAX+1)
++        bcc @ok
++        bne @long
++        lda TLEN
++        cmp #<(SAVEMAX+1)
++        bcc @ok
++@long   jsr msgbeg
++        jsr pstr
++        !pet "List too long to save", 0
++        jsr fpad
++        rts
++@ok     jsr cmdbeg
++        jsr pstr
++        !tx "!CONFIG,W", 0
++        jsr scr
++        lda #2
++        ldx DV
++        ldy #2
++        jsr openn
++        jsr rdel
++        lda ENUM
++        beq @w
++        lda #2
++        jsr CLOSE
++        jsr msgbeg
++        jsr pstr
++        !pet "Cannot write:", 0
++        jsr pemsg
++        jmp fpad
++@w      ldx #2
++        jsr CHKOUT
++        lda #<TXT
++        sta P4
++        lda #>TXT
++        sta P4+1
++        lda #0
++        sta CNT
++        sta CNT+1
++@l      lda CNT
++        cmp TLEN
++        bne @c
++        lda CNT+1
++        cmp TLEN+1
++        beq @e
++@c      ldy #0
++        lda (P4),y
++        jsr CHROUT
++        inc P4
++        bne @i
++        inc P4+1
++@i      inc CNT
++        bne @l
++        inc CNT+1
++        jmp @l
++@e      jsr CLRCHN
++        lda #2
++        jsr CLOSE
++        jsr rdel
++        lda ENUM
++        bne @we
++        jsr msgbeg
++        jsr pstr
++        !pet "Saved", 0
++        jsr fpad
++        rts
++@we     jsr msgbeg
++        jsr pstr
++        !pet "Write error ", 0
++        lda ENUM
++        ldx #0
++        jsr fnum
++        jmp fpad
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; The screen: row 0 title, 1-2 the units, 3 the list header, 4-19 the list, 20 messages, 21-23 the keys.
++drawall jsr scr
++        jsr pstr                ; the menu clears in the name color
++        !pet C_NAME, 147, 0
++        ldx #0
++        jsr rowbeg
++        jsr pstr
++        !pet C_BAN, 18, "             TDrive Config", 0
++        jsr fpad
++        jsr pstr
++        !pet 146, 0
++        lda #$A0                ; the banner's last column straight into the screen: printing it would link rows 0 and 1
++        sta $0400+39
++        lda THEME+2
++        sta $D800+39
++drawmid jsr drawdrv
++        jsr drawlh
++        jsr drawlist
++        ldx #21
++        jsr rowbeg
++        jsr pstr
++        !by 18, C_OPT : !pet "Return" : !by 146, C_SRC : !pet " Mount "
++        !by 18, C_OPT : !pet "B" : !by 146, C_SRC : !pet " Browse+Mount "
++        !by 18, C_OPT : !pet "U" : !by 146, C_SRC : !pet " Unmount"
++        !by 0
++        jsr fpad
++        ldx #22
++        jsr rowbeg
++        jsr pstr
++        !by 18, C_OPT : !pet "A" : !by 146, C_SRC : !pet " Add "
++        !by 18, C_OPT : !pet "E" : !by 146, C_SRC : !pet " Edit "
++        !by 18, C_OPT : !pet "D" : !by 146, C_SRC : !pet " Delete "
++        !by 18, C_OPT : !pet "+/-" : !by 146, C_SRC : !pet " Reorder"
++        !by 0
++        jsr fpad
++        ldx #23
++        jsr rowbeg
++        jsr pstr
++        !by 18, C_OPT : !pet "T" : !by 146, C_SRC : !pet " SD/USB list "
++        !by 18, C_OPT : !pet "R" : !by 146, C_SRC : !pet " Refresh "
++        !by 18, C_OPT : !pet "Q" : !by 146, C_SRC : !pet " Exit to menu"
++        !by 0
++        jmp fpad
++
++; "SD  8: /path" / "USB 9: (Nothing mounted)" / "USB  : No drive", the shown unit's name in reverse
++drawdrv lda #0
++        sta U
++@u      ldx U
++        inx
++        jsr atrow
++        lda #255
++        sta FLDN
++        jsr pstr
++        !pet C_SRC, 0
++        lda U
++        cmp UN
++        bne @n
++        jsr pstr
++        !pet 18, C_OPT, 0
++@n      lda U
++        bne @usb
++        jsr pstr
++        !pet "SD ", 0
++        jmp @num
++@usb    jsr pstr
++        !pet "USB", 0
++@num    ldx U
++        lda DEVS,x
++        bne @d
++        jsr pstr
++        !pet "  : ", 0
++        jmp @m
++@d      ldx #2
++        jsr fnum
++        jsr pstr
++        !pet ": ", 0
++@m      jsr pstr
++        !pet 146, C_NAME, 0
++        lda #32
++        sta FLDN
++        ldx U
++        lda DEVS,x
++        bne @h
++        jsr pstr
++        !pet "No drive", 0
++        jmp @p
++@h      lda MPL,x
++        bne @mp
++        jsr pstr
++        !pet "(Nothing mounted)", 0
++        jmp @p
++@mp     jsr mpptr
++        lda #32
++        jsr fpath
++@p      jsr fpad
++        inc U
++        lda U
++        cmp #2
++        bcs @x
++        jmp @u
++@x      rts
++
++drawlh  ldx #3
++        jsr rowbeg
++        jsr pstr
++        !pet C_SRC, "List: ", 0
++        lda UN
++        bne @u
++        jsr pstr
++        !pet "SD", 0
++        jmp @n
++@u      jsr pstr
++        !pet "USB", 0
++@n      jsr pstr
++        !pet " (", 0
++        lda NE
++        ldx #0
++        jsr fnum
++        jsr pstr
++        !pet " entries)", 0
++@sp     lda FLDN                ; the Alt button gesture for this list, at the right end
++        cmp #12
++        bcc @alt
++        lda #' '
++        jsr fch
++        jmp @sp
++@alt    jsr pstr
++        !pet C_TIME, 0
++        lda UN
++        bne @a2
++        jsr pstr
++        !pet "Alt: 1 tap", 0
++        jmp @e
++@a2     jsr pstr
++        !pet "Alt: 2 taps", 0
++@e      jmp fpad
++
++drawlist
++        lda #0
++        sta R
++@r      lda TP
++        clc
++        adc R
++        sta KK
++        jsr drawrow
++        inc R
++        lda R
++        cmp #VR
++        bcc @r
++        rts
++
++; list entry KK on its row: ">" on the cursor, "*" when mounted, number, path (reverse on the cursor), color, a block in it, flashes
++drawrow lda KK
++        sec
++        sbc TP
++        clc
++        adc #4
++        tax
++        jsr rowbeg
++        lda KK
++        cmp NE
++        bcc @e
++        jmp fpad
++@e      lda #255
++        sta FLDN
++        jsr pstr
++        !pet C_OPT, 0
++        lda #' '
++        ldx KK
++        cpx CU
++        bne @c
++        lda #'>'
++@c      jsr fch
++        jsr mstar
++        jsr fch
++        jsr pstr
++        !pet C_SRC, 0
++        lda KK
++        clc
++        adc #1
++        ldx #3
++        jsr fnum
++        jsr pstr
++        !pet " ", C_NAME, 0
++        lda KK
++        cmp CU
++        bne @p
++        lda #18
++        jsr fch
++@p      ldx KK
++        lda EPL,x
++        sta P2
++        lda EPH,x
++        sta P2+1
++        lda ELN,x
++        sta SLEN
++        lda #22
++        jsr fpath
++        lda #255
++        sta FLDN
++        jsr pstr
++        !pet 146, C_SRC, " ", 0
++        ldx KK
++        lda EC,x
++        ldx #3
++        jsr fnum
++        jsr pstr
++        !pet " ", 18, 0
++        ldx KK
++        lda EC,x                ; the block in the entry's color
++        sta TXTCOL
++        jsr pstr
++        !pet "  ", 146, C_SRC, 0
++        ldx KK
++        lda EF,x
++        ldx #3
++        jsr fnum
++        lda #'X'
++        jmp fch
++
++THEME   !by 0, 4, 4, 10, 7, 14, 13 ; the TR menu's color references (its defaults until "!STATE" gives them): see C_BAN
++
++; A = '*' when entry KK is the image mounted on the shown unit, else ' '
++mstar   ldx UN
++        jsr mpptr
++        lda P2
++        sta P4
++        lda P2+1
++        sta P4+1
++        ldx KK
++        lda ELN,x
++        cmp SLEN
++        bne @no
++        lda EPL,x
++        sta P2
++        lda EPH,x
++        sta P2+1
++        ldy SLEN
++@c      dey
++        cpy #255
++        beq @yes
++        lda (P2),y
++        cmp (P4),y
++        beq @c
++@no     lda #' '
++        rts
++@yes    lda #'*'
++        rts
++
++; keep the cursor on the screen
++fixtp   lda CU
++        cmp TP
++        bcs @a
++        sta TP
++@a      lda TP
++        clc
++        adc #VR
++        sta T0
++        lda CU
++        cmp T0
++        bcc @r
++        sec
++        sbc #VR-1
++        sta TP
++@r      rts
++
++; keep the cursor in the list
++clampcu lda CU
++        cmp NE
++        bcc @r
++        ldx NE
++        dex
++        bpl @s
++        ldx #0
++@s      stx CU
++@r      rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; The keys.
++k_up    lda CU
++        beq @r
++        dec CU
++        lda CU
++        cmp TP
++        bcs @two
++        sta TP
++        jmp drawlist
++@two    sta KK
++        inc KK
++        jsr drawrow
++        lda CU
++        sta KK
++        jmp drawrow
++@r      rts
++
++k_down  lda CU
++        clc
++        adc #1
++        cmp NE
++        bcs @r
++        sta CU
++        lda TP
++        clc
++        adc #VR
++        cmp CU
++        beq @sc
++        bcc @sc
++        lda CU
++        sta KK
++        dec KK
++        jsr drawrow
++        lda CU
++        sta KK
++        jmp drawrow
++@sc     lda CU
++        sec
++        sbc #VR-1
++        sta TP
++        jmp drawlist
++@r      rts
++
++; RETURN: mount the entry
++k_ret   lda NE
++        bne @go
++        rts
++@go     ldx CU
++        lda EPL,x
++        sta P2
++        lda EPH,x
++        sta P2+1
++        lda ELN,x
++        sta SLEN
++; "CD:" + (P2)/SLEN on the shown unit
++mountp  jsr cmdbeg
++        jsr pstr
++        !tx "CD:", 0
++        jsr fmem
++        jsr sendcmd
++        lda ENUM
++        bne @e
++        jsr msgbeg
++        jsr pstr
++        !pet "Mounted", 0
++        jsr fpad
++        jmp @d
++@e      jsr perr
++@d      jsr readstate
++        jmp drawmid
++
++; B: browse the card, mount the image picked
++k_brow  jsr browse
++        lda BR
++        bne @m
++        jmp drawall
++@m      jsr pathbp
++        jmp mountp
++
++; U: unmount
++k_unm   ldx UN
++        lda MPL,x
++        bne @u
++        jsr msgbeg
++        jsr pstr
++        !pet "Nothing mounted", 0
++        jsr fpad
++        rts
++@u      jsr cmdbeg
++        jsr pstr
++        !tx "CD:", LARROW, 0
++        jsr sendcmd
++        lda ENUM
++        bne @e
++        jsr msgbeg
++        jsr pstr
++        !pet "Unmounted", 0
++        jsr fpad
++        jmp @d
++@e      jsr msgbeg
++        jsr pstr
++        !pet "Error ", 0
++        lda ENUM
++        ldx #0
++        jsr fnum
++        jsr fpad
++@d      jsr readstate
++        jmp drawmid
++
++; A: add an entry (browse, color, flashes)
++k_add   lda NE
++        cmp #MAXE
++        bcs @full
++        lda NL
++        cmp #MAXL-1
++        bcc @ok
++@full   jsr msgbeg
++        jsr pstr
++        !pet "List is full", 0
++        jsr fpad
++        rts
++@ok     jsr browse
++        lda BR
++        bne @c
++        jmp drawall
++@c      lda #15
++        sta NMAX
++        lda #1
++        ldx #<lbcol
++        ldy #>lbcol
++        jsr asknum
++        bcs @cn
++        sta PC
++        lda #20
++        sta NMAX
++        lda #1
++        ldx #<lbfl
++        ldy #>lbfl
++        jsr asknum
++        bcs @cn
++        sta PF
++        jsr pathbp
++        jsr mkline
++        lda #3
++        sta OPK
++        lda #255
++        sta OPA
++        jsr rebuild
++        bcs @long
++        ldx NE
++        dex
++        stx CU
++        jsr fixtp
++        jsr drawall
++        jmp save
++@cn     jmp drawall
++@long   jmp toolong
++
++; E: edit the entry (path, "?" browses for it; color; flashes)
++k_edit  lda NE
++        bne @go
++        rts
++@go     ldx CU
++        lda EPL,x
++        sta P2
++        lda EPH,x
++        sta P2+1
++        lda ELN,x
++        cmp #255
++        bcc @l
++        lda #254
++@l      sta EDLEN
++        ldy #0
++@cp     cpy EDLEN
++        bcs @cd
++        lda (P2),y
++        sta EDBUF,y
++        iny
++        bne @cp
++@cd     lda #78
++        ldx #<lbpath
++        ldy #>lbpath
++        jsr edline
++        bcc @got
++        jmp drawmid
++@got    lda EDLEN
++        cmp #1
++        bne @typed
++        lda EDBUF
++        cmp #'?'
++        bne @typed
++        jsr browse
++        lda BR
++        bne @chk
++        jmp drawall
++@typed  ldy #0
++@t      cpy EDLEN
++        bcs @td
++        lda EDBUF,y
++        sta PATHB,y
++        iny
++        bne @t
++@td     sty PATHBL
++@chk    lda PATHBL
++        beq @bad
++        lda PATHB
++        cmp #'/'
++        beq @num
++@bad    jsr drawmid
++        jsr msgbeg
++        jsr pstr
++        !pet "Path must start with /", 0
++        jsr fpad
++        rts
++@num    lda #15
++        sta NMAX
++        ldx CU
++        lda EC,x
++        ldx #<lbcol
++        ldy #>lbcol
++        jsr asknum
++        bcs @cn
++        sta PC
++        lda #20
++        sta NMAX
++        ldx CU
++        lda EF,x
++        ldx #<lbfl
++        ldy #>lbfl
++        jsr asknum
++        bcs @cn
++        sta PF
++        jsr pathbp
++        jsr mkline
++        lda #0
++        sta OPK
++        ldx CU
++        lda EX,x
++        sta OPA
++        jsr rebuild
++        bcs toolong
++        jsr drawall
++        jmp save
++@cn     jmp drawall
++
++toolong jsr drawall
++        jsr msgbeg
++        jsr pstr
++        !pet "List too long", 0
++        jsr fpad
++        rts
++
++; D: delete the entry (asks)
++k_del   lda NE
++        bne @go
++        rts
++@go     jsr msgbeg
++        jsr pstr
++        !pet "Delete entry ", 0
++        lda CU
++        clc
++        adc #1
++        ldx #0
++        jsr fnum
++        jsr pstr
++        !pet "? (y/n)", 0
++        jsr fpad
++        jsr getkey
++        cmp #'Y'
++        beq @y
++        cmp #'Y'+128
++        beq @y
++        jsr msgbeg
++        jmp fpad
++@y      lda #1
++        sta OPK
++        ldx CU
++        lda EX,x
++        sta OPA
++        jsr rebuild
++        jsr clampcu
++        jmp moved
++
++; +: move the entry down, -: up
++k_plus  lda CU
++        clc
++        adc #1
++        cmp NE
++        bcc @go
++        rts
++@go     tax
++        lda EX,x
++        sta OPB
++        ldx CU
++        lda EX,x
++        sta OPA
++        lda #2
++        sta OPK
++        jsr rebuild
++        inc CU
++moved   jsr fixtp
++        jsr drawmid
++        jmp save
++
++k_minus lda CU
++        bne @go
++        rts
++@go     tax
++        dex
++        lda EX,x
++        sta OPB
++        ldx CU
++        lda EX,x
++        sta OPA
++        lda #2
++        sta OPK
++        jsr rebuild
++        dec CU
++        jmp moved
++
++; T: the other unit's list
++k_tog   lda UN
++        eor #1
++        tax
++        lda DEVS,x
++        bne @ok
++        jsr msgbeg
++        jsr pstr
++        !pet "No drive on that unit", 0
++        jsr fpad
++        rts
++@ok     stx UN
++        jsr setunit
++        jsr readcfg
++        lda #0
++        sta CU
++        sta TP
++        jmp drawmid
++
++; R: read everything again (the Alt button may have switched the disk)
++k_ref   jsr readstate
++        jsr setunit
++        jsr readcfg
++        jsr clampcu
++        jsr fixtp
++        jsr drawmid
++        jsr msgbeg
++        jsr pstr
++        !pet "Refreshed", 0
++        jsr fpad
++        rts
++
++pathbp  lda #<PATHB
++        sta P2
++        lda #>PATHB
++        sta P2+1
++        lda PATHBL
++        sta SLEN
++        rts
++
++lbcol   !pet "Color 0-15: ", 0
++lbfl    !pet "Flashes 0-20: ", 0
++lbpath  !pet "Path(?=browse): ", 0
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; Line editor on row 23: label at X/Y (zero terminated), EDBUF/EDLEN the text, at most A characters typed (a longer text can still be
++; shortened). RETURN: carry clear; left arrow: carry set. Typed: codes 32-94.
++edline  sta ML
++        stx LBP
++        sty LBP+1
++@show   ldx #23
++        jsr atrow
++        lda #255
++        sta FLDN
++        lda #C_SRC
++        jsr fch
++        lda LBP
++        sta P2
++        lda LBP+1
++        sta P2+1
++        ldy #0
++@lb     lda (P2),y
++        beq @le
++        jsr fch
++        iny
++        bne @lb
++@le     sty T0
++        lda #C_NAME
++        jsr fch
++        lda #38
++        sec
++        sbc T0
++        sta T1
++        ldx EDLEN
++        lda #CURSOR
++        sta EDBUF,x
++        inx
++        stx SLEN
++        lda #<EDBUF
++        sta P2
++        lda #>EDBUF
++        sta P2+1
++        lda T1
++        jsr fpath
++@k      jsr getkey
++        cmp #13
++        beq @ok
++        cmp #LARROW
++        beq @cn
++        cmp #20
++        bne @ch
++        lda EDLEN
++        beq @k
++        dec EDLEN
++        jmp @show
++@ch     cmp #32
++        bcc @k
++        cmp #LARROW
++        bcs @k
++        ldx EDLEN
++        cpx ML
++        bcs @k
++        sta EDBUF,x
++        inc EDLEN
++        jmp @show
++@ok     clc
++        rts
++@cn     sec
++        rts
++
++; Ask for a number with label X/Y, default A, at most NMAX: A = the number (the default when it is not one or too big), carry set = canceled.
++asknum  sta DEF
++        stx LBP2
++        sty LBP2+1
++        lda #OUTLINE
++        sta OUTM
++        lda #0
++        sta LBLEN
++        lda DEF
++        ldx #0
++        jsr fnum
++        jsr scr
++        ldx #0
++@c      cpx LBLEN
++        bcs @d
++        lda LINEB,x
++        sta EDBUF,x
++        inx
++        bne @c
++@d      stx EDLEN
++        lda #2
++        ldx LBP2
++        ldy LBP2+1
++        jsr edline
++        bcs @r
++        jsr edval
++        bcs @def
++        cmp NMAX
++        bcc @ok
++        beq @ok
++@def    lda DEF
++@ok     clc
++@r      rts
++
++; EDBUF as a number (leading spaces, then digits up to the first other character; empty = 0): A, carry set if it starts with '-'
++edval   ldy #0
++        lda #0
++        sta V
++@s      cpy EDLEN
++        bcs @d
++        lda EDBUF,y
++        cmp #' '
++        bne @g
++        iny
++        bne @s
++@g      cmp #'-'
++        beq @bad
++@l      cpy EDLEN
++        bcs @d
++        lda EDBUF,y
++        sec
++        sbc #'0'
++        cmp #10
++        bcs @d
++        sta T2
++        lda V
++        asl
++        asl
++        adc V
++        asl
++        adc T2
++        sta V
++        iny
++        bne @l
++@d      lda V
++        clc
++        rts
++@bad    sec
++        rts
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; The browser: folders and .D64/.D71/.D81 of the shown unit, from "$/folder/" listings (a listing by path leaves the mount alone).
++; RETURN opens a folder (".." goes up) or picks an image: BR = 1 and PATHB / PATHBL its path. Left arrow: BR = 0.
++browse  lda #'/'
++        sta BP
++        lda #1
++        sta BPLN
++        lda #0
++        sta BR
++@new    lda #0
++        sta BQ
++        sta BW
++        jsr blist
++@draw   jsr bdraw
++@key    jsr getkey
++        cmp #LARROW
++        bne @1
++        rts
++@1      cmp #145
++        bne @2
++        lda BQ
++        beq @key
++        dec BQ
++        jmp @mv
++@2      cmp #17
++        bne @3
++        lda BQ
++        clc
++        adc #1
++        cmp BK
++        bcs @key
++        sta BQ
++        jmp @mv
++@3      cmp #13
++        bne @key
++        lda BK
++        beq @key
++        lda BQ
++        bne @in
++        lda BPLN
++        cmp #2
++        bcc @in                 ; the root has no ".."
++        ldy BPLN                ; "..": cut at the last "/"
++@sl     dey
++        lda BP,y
++        cmp #'/'
++        bne @sl
++        sty BPLN
++        tya
++        bne @new
++        lda #1                  ; up to "/" itself
++        sta BPLN
++        jmp @new
++@in     jsr mkjn
++        bcs @key
++        ldx BQ
++        lda BTY,x
++        bne @img
++        ldy #0                  ; a folder: BP = PATHB
++@c      lda PATHB,y
++        sta BP,y
++        iny
++        cpy PATHBL
++        bcc @c
++        sty BPLN
++        jmp @new
++@img    lda #1
++        sta BR
++        rts
++@mv     lda BQ
++        cmp BW
++        bcs @m1
++        sta BW
++@m1     lda BW
++        clc
++        adc #VR
++        sta T0
++        lda BQ
++        cmp T0
++        bcc @m2
++        sec
++        sbc #VR-1
++        sta BW
++@m2     jmp @draw
++
++; PATHB = BP + "/" + name BQ (no second "/" at the root); carry set (and a message) when longer than BPMAX
++mkjn    lda BQ
++        jsr bname
++        lda BPLN
++        clc
++        adc SLEN
++        cmp #BPMAX
++        bcs @long
++        ldy #0
++@c      lda BP,y
++        sta PATHB,y
++        iny
++        cpy BPLN
++        bcc @c
++        cpy #2
++        bcc @r
++        lda #'/'
++        sta PATHB,y
++        iny
++@r      tya
++        tax
++        ldy #0
++@n      cpy SLEN
++        bcs @d
++        lda (P2),y
++        sta PATHB,x
++        inx
++        iny
++        bne @n
++@d      stx PATHBL
++        clc
++        rts
++@long   jsr msgbeg
++        jsr pstr
++        !pet "Path too long", 0
++        jsr fpad
++        sec
++        rts
++
++; P2 = the name of browser entry A (16-byte slots), SLEN its length
++bname   tax
++        lda BNL,x
++        sta SLEN
++        stx P2
++        lda #0
++        sta P2+1
++        ldy #4
++@s      asl P2
++        rol P2+1
++        dey
++        bne @s
++        clc
++        lda P2
++        adc #<BNAMES
++        sta P2
++        lda P2+1
++        adc #>BNAMES
++        sta P2+1
++        rts
++
++; read the listing of BP into BNAMES/BNL/BTY, BK entries (first ".." below the root)
++blist   lda #0
++        sta BK
++        lda BPLN
++        cmp #2
++        bcc @o
++        lda #0
++        jsr bname
++        lda #'.'
++        ldy #0
++        sta (P2),y
++        iny
++        sta (P2),y
++        lda #2
++        sta BNL
++        lda #0
++        sta BTY
++        inc BK
++@o      jsr cmdbeg
++        jsr pstr
++        !tx "$", 0
++        lda #<BP
++        sta P2
++        lda #>BP
++        sta P2+1
++        lda BPLN
++        sta SLEN
++        jsr fmem
++        ldx BPLN
++        lda BP-1,x
++        cmp #'/'
++        beq @s
++        lda #'/'
++        jsr fch
++@s      jsr scr
++        jsr fopen               ; in blocks when the drive answers that
++        bcc @go
++        lda ENUM
++        bne @cant               ; it refused, with a reason
++        lda #1
++        ldx DV
++        ldy #0
++        jsr openn
++        jsr rdel
++        lda ENUM
++        beq @rd
++@cant   lda #1
++        jsr CLOSE
++        jsr msgbeg
++        jsr pstr
++        !pet "Cannot list: ", 0
++        jsr pemsg
++        jmp fpad
++@rd     ldx #1
++        jsr CHKIN
++@go     lda #0
++        sta STATUS
++        jsr rdb                 ; load address
++        jsr rdb
++@line   jsr rdb                 ; link
++        sta T0
++        jsr rdb
++        ora T0
++        sta T0
++        lda STATUS
++        and #$BF
++        bne @end
++        lda T0
++        beq @end
++        jsr rdb                 ; line number (blocks)
++        jsr rdb
++        lda #0
++        sta LLEN
++@ch     jsr rdb
++        sta CH
++        lda STATUS
++        sta RS
++        and #$BF
++        bne @end
++        lda CH
++        beq @eol
++        ldy LLEN
++        cpy #60
++        bcs @nx
++        sta LINE,y
++        inc LLEN
++@nx     lda RS
++        and #$40
++        beq @ch
++@eol    jsr bentry
++        lda RS
++        and #$40
++        beq @line
++@end    jsr CLRCHN
++        lda #1
++        jmp CLOSE
++
++; one listing line in LINE/LLEN: the name between the first two quotes (trailing spaces off), kept when the type after it is DIR/D64/D71/D81
++bentry  ldy LLEN
++        lda #0
++        sta LINE,y
++        sta Q1
++        ldy #0
++@q      cpy LLEN
++        bcs @no
++        lda LINE,y
++        iny
++        cmp #34
++        bne @q
++        ldx Q1
++        bne @two
++        sty Q1                  ; the name starts here
++        jmp @q
++@two    dey
++        sty Q2                  ; the closing quote
++        tya
++        sec
++        sbc Q1
++        sta NLN
++@tr     lda NLN
++        beq @ty
++        clc
++        adc Q1
++        tay
++        lda LINE-1,y
++        cmp #' '
++        bne @ty
++        dec NLN
++        jmp @tr
++@ty     ldy Q2
++        iny
++@sp     lda LINE,y
++        cmp #' '
++        bne @t0
++        iny
++        bne @sp
++@t0     sty T0
++        ldx #0
++        stx T1
++@tc     ldy T0
++        lda LINE,y
++        cmp types,x
++        bne @tn
++        lda LINE+1,y
++        cmp types+1,x
++        bne @tn
++        lda LINE+2,y
++        cmp types+2,x
++        beq @hit
++@tn     inc T1
++        inx
++        inx
++        inx
++        cpx #12
++        bcc @tc
++@no     rts
++@hit    lda BK
++        cmp #MAXB
++        bcs @no
++        jsr bname
++        ldx BK
++        lda T1
++        sta BTY,x
++        lda NLN
++        cmp #17
++        bcc @l
++        lda #16
++@l      sta BNL,x
++        sta SLEN
++        ldy #0
++@cp     cpy SLEN
++        bcs @d
++        tya
++        clc
++        adc Q1
++        tax
++        lda LINE,x
++        sta (P2),y
++        iny
++        bne @cp
++@d      inc BK
++        rts
++
++types   !tx "DIRD64D71D81"
++
++; the browser screen: row 3 the folder, 4-19 the entries, 21 the keys
++bdraw   ldx #3
++        jsr rowbeg
++        jsr pstr
++        !pet C_SRC, "Browse: ", C_NAME, 0
++        lda #<BP
++        sta P2
++        lda #>BP
++        sta P2+1
++        lda BPLN
++        sta SLEN
++        jsr fmem
++        jsr fpad
++        lda #0
++        sta R
++@r      lda BW
++        clc
++        adc R
++        sta KK
++        lda R
++        clc
++        adc #4
++        tax
++        jsr rowbeg
++        lda KK
++        cmp BK
++        bcc @e
++        jsr fpad
++        jmp @nx
++@e      lda #255
++        sta FLDN
++        jsr pstr
++        !pet C_OPT, 0
++        lda #' '
++        ldx KK
++        cpx BQ
++        bne @c
++        lda #'>'
++@c      jsr fch
++        jsr pstr
++        !pet C_NAME, 0
++        lda KK
++        cmp BQ
++        bne @n
++        lda #18
++        jsr fch
++@n      lda KK
++        jsr bname
++        lda #17
++        jsr ffield
++        lda #255
++        sta FLDN
++        jsr pstr
++        !pet 146, C_SRC, " ", 0
++        ldx KK
++        lda BTY,x
++        sta T0
++        asl
++        adc T0
++        tax
++        lda types,x
++        jsr fchu
++        lda types+1,x
++        jsr fchu
++        lda types+2,x
++        jsr fchu
++        lda #17
++        sta FLDN
++        jsr fpad
++@nx     inc R
++        lda R
++        cmp #VR
++        bcs @h
++        jmp @r
++@h      ldx #21
++        jsr rowbeg
++        jsr pstr
++        !by 18, C_OPT : !pet "Return" : !by 146, C_SRC : !pet " Open/Select  "
++        !by 18, C_OPT : !pet LARROW : !by 146, C_SRC : !pet " Cancel"
++        !by 0
++        jsr fpad
++        ldx #22
++        jsr rowbeg
++        jsr fpad
++        ldx #23
++        jsr rowbeg
++        jmp fpad
++
++; ---------------------------------------------------------------------------------------------------------------------------------
++; per +mr: the operand's address, the register's offset; in source order (findmb points each at the registers found)
++MRTAB   !wo mr_dv : !by DEV0REG - MBXK
++        !wo mr_q0 : !by MBXCMD - MBXK
++        !wo mr_q1 : !by MBXSTAT - MBXK
++        !wo mr_q2 : !by MBXSTAT - MBXK
++        !wo mr_sc : !by MBXARG - MBXK
++        !wo mr_m0 : !by MBXCMD - MBXK
++        !wo mr_m1 : !by MBXSTAT - MBXK
++        !wo mr_m2 : !by MBXST - MBXK
++        !wo mr_m3 : !by MBXST - MBXK
++        !wo mr_m4 : !by MBXDATA - MBXK
++        !wo mr_m5 : !by MBXDATA - MBXK
++        !wo mr_f0 : !by MBXLEN - MBXK
++        !wo mr_f1 : !by MBXARG - MBXK
++MRTABN  = * - MRTAB
++!if MRTABN <> mrt_n * 3 { !error "MRTAB lists ", MRTABN / 3, " operands, +mr marked ", mrt_n }
++!if MRTABN >= 256 { !error "MRTAB too long for findmb" }
++
++!if * > $2200 { !error "the program runs into its BSS at $2200" }
++; BSS from $2200: labels only, not part of the PRG
++TXT     = $2200                 ; the file ($2200, page aligned: putc checks pages)
++NEWB    = TXT + 4096            ; the file being rebuilt
++MPB     = NEWB + 4096           ; the mounted images, 128 bytes per unit (page aligned: mpptr adds 128 to the low byte)
++!if ((<TXT) | (<NEWB) | (<MPB)) <> 0 { !error "TXT, NEWB and MPB must be page aligned" }
++BNAMES  = MPB + 256
++BNL     = BNAMES + (MAXB*16)
++BTY     = BNL + MAXB
++LSL     = BTY + MAXB
++LSH     = LSL + MAXL
++LLN     = LSH + MAXL
++EPL     = LLN + MAXL
++EPH     = EPL + MAXE
++ELN     = EPH + MAXE
++EC      = ELN + MAXE
++EF      = EC + MAXE
++EX      = EF + MAXE
++BP      = EX + MAXE
++PATHB   = BP + (BPMAX+1)
++EDBUF   = PATHB + 256
++LINEB   = EDBUF + 257
++CMD     = LINEB + 256
++LINE    = CMD + 256
++ERRBUF  = LINE + 64
++DIGS    = ERRBUF + 48
++DEVS    = DIGS + 3
++AGENT   = DEVS + 2              ; $80: the agent's registers (findmb)
++MRLO    = AGENT + 1
++MRHI    = MRLO + 1
++SDV     = MRHI + 1              ; agscan: the number being probed
++MPL     = SDV + 1
++TLEN    = MPL + 2
++TEND    = TLEN + 2
++LS0     = TEND + 2
++CNT     = LS0 + 2
++V       = CNT + 2
++N1      = V + 2
++LBP     = N1 + 2
++LBP2    = LBP + 2
++OUTM    = LBP2 + 2
++FLDN    = OUTM + 1
++FCH     = FLDN + 1
++FX      = FCH + 1
++FY      = FX + 1
++NW      = FY + 1
++ND      = NW + 1
++SLEN    = ND + 1
++SLEN2   = SLEN + 1
++LBLEN   = SLEN2 + 1
++CMDLEN  = LBLEN + 1
++OC      = CMDLEN + 1
++OB      = OC + 1
++OT      = OB + 1
++UN      = OT + 1
++U       = UN + 1
++UOFS    = U + 1
++DV      = UOFS + 1
++EL      = DV + 1
++NL      = EL + 1
++NLC     = NL + 1
++NE      = NLC + 1
++LI      = NE + 1
++LLEN    = LI + 1
++LIMHI   = LLEN + 1
++CH      = LIMHI + 1
++RS      = CH + 1
++EI      = RS + 1
++ERRLEN  = EI + 1
++ENUM    = ERRLEN + 1
++TMP     = ENUM + 1
++IX      = TMP + 1
++CU      = IX + 1
++TP      = CU + 1
++KK      = TP + 1
++R       = KK + 1
++PC      = R + 1
++PF      = PC + 1
++CI      = PF + 1
++T0      = CI + 1
++T1      = T0 + 1
++T2      = T1 + 1
++T3      = T2 + 1
++T4      = T3 + 1
++OPK     = T4 + 1
++OPA     = OPK + 1
++OPB     = OPA + 1
++OVF     = OPB + 1
++ML      = OVF + 1
++DEF     = ML + 1
++NMAX    = DEF + 1
++EDLEN   = NMAX + 1
++PATHBL  = EDLEN + 1
++BPLN    = PATHBL + 1
++BQ      = BPLN + 1
++BW      = BQ + 1
++BK      = BW + 1
++BR      = BK + 1
++Q1      = BR + 1
++Q2      = Q1 + 1
++NLN     = Q2 + 1
++FAST    = NLN + 1               ; $80: the listing comes from fget
++FI      = FAST + 1              ; fget: next byte in the window,
++FN      = FI + 1                ; bytes in it,
++FEND    = FN + 1                ; $40 once the last block came
++FGX     = FEND + 1
++MST     = FGX + 1               ; mcall: the answer's ST
++MW0     = MST + 1
++MW1     = MW0 + 1
++THN     = MW1 + 1               ; the colors being read (THEME takes them when all seven came)
++!if THN + 7 > $5200 { !error "the BSS ends at $51FF" }
 diff --git a/Source/Teensy/C128Prg.ino b/Source/Teensy/C128Prg.ino
 index b9f2ec2..3afdde8 100644
 --- a/Source/Teensy/C128Prg.ino
@@ -200,7 +2942,7 @@ index 5c20eda..d1928c4 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 35b095b..8a2221c 100644
+index 35b095b..ed17f69 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -222,7 +2964,7 @@ index 35b095b..8a2221c 100644
  
  
 -#define TRVersion              "0.9.0.1"    //*VERSION*
-+#define TRVersion              "0.9.0.1.77"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 77)
++#define TRVersion              "0.9.0.1.78"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 78)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
@@ -365,10 +3107,10 @@ index 5ba190e..4f0a9b6 100644
              TxMsgOffset = 0;
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
 new file mode 100644
-index 0000000..5fcb6f7
+index 0000000..d542938
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
-@@ -0,0 +1,1873 @@
+@@ -0,0 +1,1875 @@
 +// The TDrive Special IOs: the virtual IEC drive and its SD / USB glue. On the TeensyROM+ (Fab04_TDrive) "TDrive KERNAL" and its
 +// combined handlers serve a replacement KERNAL; on both boards (TDrive_Agent) IOH_TDriveAgent.c reaches the same drive through the
 +// KERNAL's RAM vectors and a 6502 agent (docs/DESIGN.md 53). The KERNAL-only parts are under Fab04_TDrive.
@@ -691,6 +3433,7 @@ index 0000000..5fcb6f7
 +   const char *slash = strrchr(path, '/');
 +   const char *leaf = slash ? slash + 1 : path;
 +   if (strlen(leaf) >= sizeof u->imgName) return 33;
++   if (!image_kind(leaf)) return 74;                                              // only .d64/.d71/.d81: the format comes from the size alone
 +   TD_Unmount(NULL, unit);
 +   // Check existence and size with a read-only open first: FILE_WRITE creates missing files on SD/USB, and a mistyped
 +   // CD: must never litter the card with empty "images".
@@ -1606,12 +4349,13 @@ index 0000000..5fcb6f7
 +   return 0;
 +}
 +
-+// 0 = a readable file of at least D64 size; else 62 (not found) / 74 (not a disk image), reason in msg.
++// 0 = a readable .d64/.d71/.d81 file of at least D64 size; else 62 (not found) / 74 (not a disk image), reason in msg.
 +FLASHMEM static int TD_CheckImage(FS *fs, const char *path, char *msg, size_t cap)
 +{
 +   File probe = fs->open(path, FILE_READ);
 +   if (!probe) { snprintf(msg, cap, "file not found"); return 62; }
-+   bool bad = probe.isDirectory() || probe.size() < 174848;
++   const char *slash = strrchr(path, '/');
++   bool bad = probe.isDirectory() || probe.size() < 174848 || !image_kind(slash ? slash + 1 : path);
 +   probe.close();
 +   if (bad) { snprintf(msg, cap, "not a disk image"); return 74; }
 +   return 0;
@@ -2372,10 +5116,10 @@ index 0000000..431314b
 +}
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDriveREU.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDriveREU.c
 new file mode 100644
-index 0000000..48e5a0b
+index 0000000..fb9aa4b
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDriveREU.c
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,79 @@
 +// "TDrive+REU" Special IO for TeensyROM+: the virtual-drive KERNAL (IOH_TDrive.c) and the REU (IOH_REU.c) at the same time.
 +//   IO1 $DE10-$DE1A -> TDrive mailbox ($DE00-$DE0F unanswered)
 +//   IO2 $DF00-$DF7F -> REU registers (11 registers, repeated every 32 bytes as on a real 1764/1750, but only 4 times)
@@ -2429,12 +5173,15 @@ index 0000000..48e5a0b
 +      IO2Hndlr_TDrive(Address, R_Wn);
 +      return;
 +   }
++   if (R_Wn) { IO2Hndlr_REU(Address, R_Wn); return; }   // a read never arms or clears the trigger
 +   bool (*Prev)(uint16_t, bool) = fBusSnoop;
++   // while armed, IO2Hndlr_REU is shown its own hook, so a write that leaves the trigger alone or re-arms it hands REU_FF00_W_Check
++   // back and stays armed below; shown TDREU_Snoop, every register write while armed would drop the trigger
++   if (Prev == &TDREU_Snoop) fBusSnoop = &REU_FF00_W_Check;
++   else tdReuBase = Prev;                             // not armed: what to go back to
 +   IO2Hndlr_REU(Address, R_Wn);
-+   if (fBusSnoop == Prev) return;                     // the usual case: a register read or write that started nothing
-+   if (Prev != &TDREU_Snoop) tdReuBase = Prev;        // not armed before: remember what to go back to
 +   fBusSnoop = (fBusSnoop == &REU_FF00_W_Check) ? &TDREU_Snoop   // armed: watch for $FF00, keep serving the KERNAL meanwhile
-+                                                 : tdReuBase;    // cleared (immediate start / re-armed without $FF00)
++                                                 : tdReuBase;    // not armed, or cleared by an immediate start
 +}
 +
 +FLASHMEM void InitHndlr_TDriveREU()
@@ -2795,10 +5542,10 @@ index 0000000..caf329b
 +};
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c
 new file mode 100644
-index 0000000..291f87b
+index 0000000..1fb6aa5
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c
-@@ -0,0 +1,1208 @@
+@@ -0,0 +1,1213 @@
 +#include "tdrive.h"
 +#include "td_cfg.h"
 +#include <string.h>
@@ -3922,19 +6669,24 @@ index 0000000..291f87b
 +    return 0;
 +}
 +
++VD_COLD uint8_t tdrive_select(tdrive_t *v, int unit, int talk)
++{
++    v->talking = (uint8_t)(talk != 0);
++    v->wlen = 0;
++    v->act = (int8_t)unit;
++    if (v->unit[unit].disk) v->unit[unit].disk->bad = 0;   /* a bad sector some earlier step read and did not report */
++    if (!v->unit[unit].present) { v->act = 2; return ST_NODEV; }
++    return 0;
++}
++
 +VD_COLD int tdrive_mailbox(tdrive_t *v, uint8_t cmd, uint8_t arg, uint8_t *data, uint8_t *st)
 +{
 +    *data = 0; *st = 0;
 +    if (cmd == TD_LISTEN || cmd == TD_TALK) {
++        int unit = tdrive_unit_for(v, arg);
++        if (unit >= 0) { *st = tdrive_select(v, unit, cmd == TD_TALK); return 0; }
 +        v->talking = (cmd == TD_TALK);
 +        v->wlen = 0;
-+        int unit = tdrive_unit_for(v, arg);
-+        if (unit >= 0) {
-+            v->act = (int8_t)unit;
-+            if (v->unit[unit].disk) v->unit[unit].disk->bad = 0;   /* a bad sector some earlier step read and did not report */
-+            if (!v->unit[v->act].present) { v->act = 2; *st = ST_NODEV; }
-+            return 0;
-+        }
 +        v->act = -1;
 +        return 1;
 +    }
@@ -4009,10 +6761,10 @@ index 0000000..291f87b
 +}
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h
 new file mode 100644
-index 0000000..22ccdb6
+index 0000000..fc94354
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,168 @@
 +/* Virtual IEC drive: the Teensy-side state machine behind the KERNAL mailbox.
 + * Units 0/1 = devices 8/9, each backed by an optional mounted d64_t.
 + * One mailbox command in, one result out; no I/O other than the d64 and host callbacks. */
@@ -4161,6 +6913,9 @@ index 0000000..22ccdb6
 +/* Returns 1 if the transaction is not ours (fall back to the real IEC bus);
 + * 0 if handled, with data and st filled in (st = bits to OR into KERNAL ST). */
 +int tdrive_mailbox(tdrive_t *v, uint8_t cmd, uint8_t arg, uint8_t *data, uint8_t *st);
++/* LISTEN (talk 0) or TALK (talk 1) to unit 0/1 by its index, whatever device number it answers to now: a transfer opened on the
++ * unit stays on it across a U0> or a bus scan. Returns the ST bits LISTEN / TALK would ($80: the unit is absent). */
++uint8_t tdrive_select(tdrive_t *v, int unit, int talk);
 +
 +size_t tdrive_sizeof(void);
 +
@@ -4180,10 +6935,10 @@ index 0000000..22ccdb6
 +#endif
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.c b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.c
 new file mode 100644
-index 0000000..dab494a
+index 0000000..26e90fe
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.c
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,339 @@
 +#include "tdrive_io.h"
 +#include "td_cfg.h"
 +#include <string.h>
@@ -4229,37 +6984,41 @@ index 0000000..dab494a
 +    return st;
 +}
 +
-+VD_COLD static void send_name_open(vio_t *v, uint8_t dev, uint8_t sa)
++/* An open fast LOAD / SAVE is addressed by its unit, not by the device number it was opened with: a U0> or a bus scan can move
++ * that number meanwhile, and the number then reached nobody (the save's channel stayed open, the load read zeros without end). */
++VD_COLD static uint8_t sel(vio_t *v, uint8_t unit, int talk) { return tdrive_select(&v->vd, unit, talk); }
++
++VD_COLD static void send_name_open(vio_t *v, uint8_t unit, uint8_t sa)
 +{
-+    bus(v, TD_LISTEN, dev, 0);
++    sel(v, unit, 0);
 +    bus(v, TD_SECOND, sa, 0);
 +    for (unsigned i = 0; i < v->h->len && i < VIO_WIN; i++) bus(v, TD_CIOUT, v->h->window[i], 0);
 +    bus(v, TD_UNLSN, 0, 0);
 +}
 +
-+VD_COLD static void close_chan(vio_t *v, uint8_t dev, uint8_t sa)
++VD_COLD static void close_chan(vio_t *v, uint8_t unit, uint8_t sa)
 +{
-+    bus(v, TD_LISTEN, dev, 0); bus(v, TD_SECOND, sa, 0); bus(v, TD_UNLSN, 0, 0);
++    sel(v, unit, 0); bus(v, TD_SECOND, sa, 0); bus(v, TD_UNLSN, 0, 0);
 +}
 +
 +VD_COLD static void fload_open(vio_t *v)
 +{
-+    uint8_t dev = v->h->arg, b0, b1 = 0;
++    uint8_t unit = (uint8_t)tdrive_unit_for(&v->vd, v->h->arg), b0, b1 = 0;   /* vio_poll: a unit answers at ARG */
 +    v->fl_active = 0; v->fl_verify = 0;
-+    if (bus(v, TD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
++    if (sel(v, unit, 0) & 0x80) { v->h->data = 5; return; }
 +    bus(v, TD_UNLSN, 0, 0);                         /* finish probe transaction */
-+    send_name_open(v, dev, 0xF0);
-+    bus(v, TD_TALK, dev, 0); bus(v, TD_TKSA, 0x60, 0);
++    send_name_open(v, unit, 0xF0);
++    sel(v, unit, 1); bus(v, TD_TKSA, 0x60, 0);
 +    int st0 = bus(v, TD_ACPTR, 0, &b0);
 +    if (st0 & 0x02) {                               /* nothing came back: file not found */
-+        bus(v, TD_UNTLK, 0, 0); close_chan(v, dev, 0xE0);
++        bus(v, TD_UNTLK, 0, 0); close_chan(v, unit, 0xE0);
 +        v->h->data = 4; return;
 +    }
 +    v->fl_eof = (st0 & 0x40) != 0;
 +    if (!v->fl_eof) { int st1 = bus(v, TD_ACPTR, 0, &b1); v->fl_eof = (st1 & 0x40) != 0; }
 +    bus(v, TD_UNTLK, 0, 0);
 +    v->h->window[0] = b0; v->h->window[1] = b1;
-+    v->fl_active = 1; v->fl_dev = dev;
++    v->fl_active = 1; v->fl_unit = unit;
 +    v->h->data = 0;
 +}
 +
@@ -4271,9 +7030,9 @@ index 0000000..dab494a
 +    uint8_t d;
 +    *st_out = 0x40;                                         /* default: EOI, empty */
 +    if (!v->fl_active) return 0;
-+    if (v->fl_eof) { close_chan(v, v->fl_dev, 0xE0); v->fl_active = 0; return 0; }
++    if (v->fl_eof) { close_chan(v, v->fl_unit, 0xE0); v->fl_active = 0; return 0; }
 +    int eof = 0, tmo = 0;
-+    bus(v, TD_TALK, v->fl_dev, 0); bus(v, TD_TKSA, 0x60, 0);
++    sel(v, v->fl_unit, 1); bus(v, TD_TKSA, 0x60, 0);
 +    while (n < max) {
 +        int st = bus(v, TD_ACPTR, 0, &d);
 +        if (st & 0x02) { eof = 1; tmo = 1; break; }       /* a read error (bad sector): the load ends here, ST shows $42 */
@@ -4282,7 +7041,7 @@ index 0000000..dab494a
 +    }
 +    bus(v, TD_UNTLK, 0, 0);
 +    *st_out = (uint8_t)(eof ? (tmo ? 0x42 : 0x40) : 0);
-+    if (eof) { close_chan(v, v->fl_dev, 0xE0); v->fl_active = 0; }
++    if (eof) { close_chan(v, v->fl_unit, 0xE0); v->fl_active = 0; }
 +    return n;
 +}
 +
@@ -4295,7 +7054,7 @@ index 0000000..dab494a
 +
 +VD_COLD static void fload_abandon(vio_t *v)
 +{
-+    if (v->fl_active) { close_chan(v, v->fl_dev, 0xE0); v->fl_active = 0; }
++    if (v->fl_active) { close_chan(v, v->fl_unit, 0xE0); v->fl_active = 0; }
 +}
 +
 +VD_COLD static int dma_can(const vio_t *v, int need_read)
@@ -4358,15 +7117,17 @@ index 0000000..dab494a
 +    fload_open(v);
 +    if (v->h->data) return 0;                               /* not found / no device: reported as for a LOAD */
 +    uint32_t start = sa ? (uint32_t)v->h->window[0] | (uint32_t)v->h->window[1] << 8 : (uint32_t)at[0] | (uint32_t)at[1] << 8;
-+    uint32_t len = 0;
-+    while (v->fl_active) {
++    if (!vio_dma_rd_ok(start)) { fload_abandon(v); return 1; }
++    /* counted only as far as RAM a DMA read sees: past that the answer is NOTMINE whatever the rest holds, and a card file has no size limit */
++    uint32_t room = 0xD000 - start, len = 0;
++    while (v->fl_active && len <= room) {
 +        uint8_t st;
 +        unsigned n = fload_read(v, v->dma_buf, v->dma_max, &st);   /* closes the channel at the end */
 +        if (!n) break;
 +        len += n;
 +    }
 +    fload_abandon(v);
-+    if (!vio_dma_rd_ok(start) || start + len > 0xD000) return 1;
++    if (len > room) return 1;
 +    memcpy(v->h->window, name, sizeof name);
 +    v->h->len = nlen;
 +    fload_open(v);
@@ -4383,19 +7144,18 @@ index 0000000..dab494a
 +
 +VD_COLD static void fsave_open(vio_t *v)
 +{
-+    uint8_t dev = v->h->arg;
++    uint8_t unit = (uint8_t)tdrive_unit_for(&v->vd, v->h->arg);   /* vio_poll: a unit answers at ARG */
 +    v->fs_active = 0; v->fs_fail = 0;
-+    if (bus(v, TD_LISTEN, dev, 0) & 0x80) { v->h->data = 5; return; }
++    if (sel(v, unit, 0) & 0x80) { v->h->data = 5; return; }
 +    bus(v, TD_UNLSN, 0, 0);
-+    send_name_open(v, dev, 0xF1);
-+    int unit = tdrive_unit_for(&v->vd, dev);
-+    if (tdrive_chan_mode(&v->vd, unit, 1) == 3) { v->fs_active = 1; v->fs_dev = dev; v->h->data = 0; }
++    send_name_open(v, unit, 0xF1);
++    if (tdrive_chan_mode(&v->vd, unit, 1) == 3) { v->fs_active = 1; v->fs_unit = unit; v->h->data = 0; }
 +    else { int e = tdrive_pending_err(&v->vd, unit); v->h->data = (uint8_t)(e ? e : 74); }
 +}
 +
 +VD_COLD static void fsave_bytes(vio_t *v, const uint8_t *buf, unsigned n)
 +{
-+    bus(v, TD_LISTEN, v->fs_dev, 0); bus(v, TD_SECOND, 0x61, 0);
++    sel(v, v->fs_unit, 0); bus(v, TD_SECOND, 0x61, 0);
 +    for (unsigned i = 0; i < n; i++) bus(v, TD_CIOUT, buf[i], 0);
 +    bus(v, TD_UNLSN, 0, 0);
 +}
@@ -4426,7 +7186,7 @@ index 0000000..dab494a
 +    uint32_t nxt = cur + n;
 +    uint8_t ptr[2] = { (uint8_t)nxt, (uint8_t)(nxt >> 8) };
 +    if (!v->dma_write(v->dma_ctx, VIO_DMA_SAVE, ptr, 2)) {
-+        close_chan(v, v->fs_dev, 0xE1);                     /* what came so far stays in the file, as after a save cut short */
++        close_chan(v, v->fs_unit, 0xE1);                    /* what came so far stays in the file, as after a save cut short */
 +        v->fs_active = 0; v->fs_fail = 1;
 +        return 1;
 +    }
@@ -4441,9 +7201,9 @@ index 0000000..dab494a
 +    v->h->data = 0;
 +    if (v->fs_fail) { v->fs_fail = 0; return 1; }
 +    if (!v->fs_active) return 0;
-+    int unit = tdrive_unit_for(&v->vd, v->fs_dev);
++    int unit = v->fs_unit;
 +    int ok = tdrive_chan_mode(&v->vd, unit, 1) == 3;
-+    close_chan(v, v->fs_dev, 0xE1);
++    close_chan(v, v->fs_unit, 0xE1);
 +    if (!ok) { int e = tdrive_pending_err(&v->vd, unit); v->h->data = (uint8_t)(e ? e : 74); }
 +    v->fs_active = 0;
 +    return 0;
@@ -4520,7 +7280,7 @@ index 0000000..dab494a
 +VD_COLD size_t vio_hot_sizeof(void) { return sizeof(vio_hot_t); }
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.h b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.h
 new file mode 100644
-index 0000000..72cdd38
+index 0000000..9f0b769
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive_io.h
 @@ -0,0 +1,141 @@
@@ -4630,7 +7390,7 @@ index 0000000..72cdd38
 +typedef struct {
 +    tdrive_t vd;                       /* must stay first: callers pass a vio_t* where a tdrive_t* is wanted */
 +    vio_hot_t *h;
-+    uint8_t fl_active, fl_eof, fl_dev, fs_active, fs_dev;
++    uint8_t fl_active, fl_eof, fl_unit, fs_active, fs_unit;   /* the unit an open fast LOAD / SAVE is on (not its device number) */
 +    uint8_t fl_verify;                 /* the channel was opened by VIO_FVERIFY_OPEN: VIO_FLOAD_DMA compares instead of writing */
 +    uint8_t fs_fail;                   /* a VIO_FSAVE_DMA was abandoned: the rest of that save is answered NOTMINE */
 +    uint8_t scan_state;                /* 0 not needed, 1 to be requested, 2 requested, 3 done */
@@ -6175,14 +8935,13 @@ index 9bc9643..2db3509 100644
  #endif /* TEENSYROMC64_BIN_H */
 diff --git a/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h b/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h
 new file mode 100644
-index 0000000..861ab02
+index 0000000..3a89aba
 --- /dev/null
 +++ b/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h
-@@ -0,0 +1,532 @@
+@@ -0,0 +1,531 @@
 +#ifndef TDCONFIG_PRG_H
 +#define TDCONFIG_PRG_H
 +
-+// TDrive Config (teensyrom-tdrive util/tdconfig.s), generated by tools/make_tr_patch.sh
 +PROGMEM static const unsigned char tdconfig_prg[] = {
 +	0x01, 0x08, 0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x31, 0x00,
 +	0x00, 0x00, 0x20, 0x8c, 0x0a, 0x20, 0xb8, 0x0a, 0x0e, 0x08, 0x00, 0x20,
@@ -6265,8 +9024,8 @@ index 0000000..861ab02
 +	0xdf, 0xc9, 0xd6, 0xd0, 0x0f, 0xad, 0x0a, 0xdf, 0xc9, 0x64, 0xd0, 0x08,
 +	0xa9, 0x00, 0xa2, 0xdf, 0xa0, 0x80, 0xd0, 0x05, 0xca, 0xd0, 0xd1, 0x38,
 +	0x60, 0x8c, 0x6c, 0x51, 0x8d, 0x6d, 0x51, 0x8e, 0x6e, 0x51, 0xa2, 0x00,
-+	0xe0, 0x27, 0xf0, 0x20, 0xbd, 0x62, 0x20, 0x85, 0xfd, 0xbd, 0x63, 0x20,
-+	0x85, 0xfe, 0xbd, 0x64, 0x20, 0x18, 0x6d, 0x6d, 0x51, 0xa0, 0x00, 0x91,
++	0xe0, 0x27, 0xf0, 0x20, 0xbd, 0x61, 0x20, 0x85, 0xfd, 0xbd, 0x62, 0x20,
++	0x85, 0xfe, 0xbd, 0x63, 0x20, 0x18, 0x6d, 0x6d, 0x51, 0xa0, 0x00, 0x91,
 +	0xfd, 0xc8, 0xad, 0x6e, 0x51, 0x91, 0xfd, 0xe8, 0xe8, 0xe8, 0xd0, 0xdc,
 +	0x18, 0x60, 0xa9, 0x0e, 0x20, 0x3d, 0x0c, 0xb0, 0x2d, 0xc9, 0x00, 0xf0,
 +	0x29, 0xa9, 0x08, 0x8d, 0x6f, 0x51, 0xa9, 0x00, 0x85, 0x90, 0xad, 0x6f,
@@ -6523,7 +9282,7 @@ index 0000000..861ab02
 +	0xb2, 0x0d, 0xad, 0x9f, 0x51, 0xd0, 0x14, 0x20, 0x60, 0x0b, 0x20, 0xb8,
 +	0x0a, 0xcd, 0x4f, 0x55, 0x4e, 0x54, 0x45, 0x44, 0x00, 0x20, 0xaa, 0x0a,
 +	0x4c, 0xdd, 0x17, 0x20, 0x6d, 0x0b, 0x20, 0xde, 0x0d, 0x4c, 0x02, 0x14,
-+	0x20, 0x57, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x03, 0x4c, 0xc1, 0x13, 0x20,
++	0x20, 0x56, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x03, 0x4c, 0xc1, 0x13, 0x20,
 +	0xf6, 0x1a, 0x4c, 0xb1, 0x17, 0xae, 0x90, 0x51, 0xbd, 0x70, 0x51, 0xd0,
 +	0x1a, 0x20, 0x60, 0x0b, 0x20, 0xb8, 0x0a, 0xce, 0x4f, 0x54, 0x48, 0x49,
 +	0x4e, 0x47, 0x20, 0x4d, 0x4f, 0x55, 0x4e, 0x54, 0x45, 0x44, 0x00, 0x20,
@@ -6536,10 +9295,10 @@ index 0000000..861ab02
 +	0x02, 0x14, 0xad, 0x97, 0x51, 0xc9, 0x20, 0xb0, 0x07, 0xad, 0x95, 0x51,
 +	0xc9, 0x76, 0x90, 0x17, 0x20, 0x60, 0x0b, 0x20, 0xb8, 0x0a, 0xcc, 0x49,
 +	0x53, 0x54, 0x20, 0x49, 0x53, 0x20, 0x46, 0x55, 0x4c, 0x4c, 0x00, 0x20,
-+	0xaa, 0x0a, 0x60, 0x20, 0x57, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x03, 0x4c,
++	0xaa, 0x0a, 0x60, 0x20, 0x56, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x03, 0x4c,
 +	0xc1, 0x13, 0xa9, 0x0f, 0x8d, 0xb4, 0x51, 0xa9, 0x01, 0xa2, 0x05, 0xa0,
-+	0x1b, 0x20, 0xc3, 0x1b, 0xb0, 0x3b, 0x8d, 0xa6, 0x51, 0xa9, 0x14, 0x8d,
-+	0xb4, 0x51, 0xa9, 0x01, 0xa2, 0x13, 0xa0, 0x1b, 0x20, 0xc3, 0x1b, 0xb0,
++	0x1b, 0x20, 0xc2, 0x1b, 0xb0, 0x3b, 0x8d, 0xa6, 0x51, 0xa9, 0x14, 0x8d,
++	0xb4, 0x51, 0xa9, 0x01, 0xa2, 0x12, 0xa0, 0x1b, 0x20, 0xc2, 0x1b, 0xb0,
 +	0x28, 0x8d, 0xa7, 0x51, 0x20, 0xf6, 0x1a, 0x20, 0xa6, 0x12, 0xa9, 0x03,
 +	0x8d, 0xae, 0x51, 0xa9, 0xff, 0x8d, 0xaf, 0x51, 0x20, 0xbd, 0x11, 0xb0,
 +	0x13, 0xae, 0x97, 0x51, 0xca, 0x8e, 0xa2, 0x51, 0x20, 0xfb, 0x16, 0x20,
@@ -6548,18 +9307,18 @@ index 0000000..861ab02
 +	0xfd, 0xbd, 0x8d, 0x4b, 0x85, 0xfe, 0xbd, 0xad, 0x4b, 0xc9, 0xff, 0x90,
 +	0x02, 0xa9, 0xfe, 0x8d, 0xb5, 0x51, 0xa0, 0x00, 0xcc, 0xb5, 0x51, 0xb0,
 +	0x08, 0xb1, 0xfd, 0x99, 0xf6, 0x4d, 0xc8, 0xd0, 0xf3, 0xa9, 0x4e, 0xa2,
-+	0x22, 0xa0, 0x1b, 0x20, 0x33, 0x1b, 0x90, 0x03, 0x4c, 0x02, 0x14, 0xad,
++	0x21, 0xa0, 0x1b, 0x20, 0x32, 0x1b, 0x90, 0x03, 0x4c, 0x02, 0x14, 0xad,
 +	0xb5, 0x51, 0xc9, 0x01, 0xd0, 0x12, 0xad, 0xf6, 0x4d, 0xc9, 0x3f, 0xd0,
-+	0x0b, 0x20, 0x57, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x16, 0x4c, 0xc1, 0x13,
++	0x0b, 0x20, 0x56, 0x1c, 0xad, 0xbb, 0x51, 0xd0, 0x16, 0x4c, 0xc1, 0x13,
 +	0xa0, 0x00, 0xcc, 0xb5, 0x51, 0xb0, 0x09, 0xb9, 0xf6, 0x4d, 0x99, 0xf6,
 +	0x4c, 0xc8, 0xd0, 0xf2, 0x8c, 0xb6, 0x51, 0xad, 0xb6, 0x51, 0xf0, 0x07,
 +	0xad, 0xf6, 0x4c, 0xc9, 0x2f, 0xf0, 0x24, 0x20, 0x02, 0x14, 0x20, 0x60,
 +	0x0b, 0x20, 0xb8, 0x0a, 0xd0, 0x41, 0x54, 0x48, 0x20, 0x4d, 0x55, 0x53,
 +	0x54, 0x20, 0x53, 0x54, 0x41, 0x52, 0x54, 0x20, 0x57, 0x49, 0x54, 0x48,
 +	0x20, 0x2f, 0x00, 0x20, 0xaa, 0x0a, 0x60, 0xa9, 0x0f, 0x8d, 0xb4, 0x51,
-+	0xae, 0xa2, 0x51, 0xbd, 0xcd, 0x4b, 0xa2, 0x05, 0xa0, 0x1b, 0x20, 0xc3,
++	0xae, 0xa2, 0x51, 0xbd, 0xcd, 0x4b, 0xa2, 0x05, 0xa0, 0x1b, 0x20, 0xc2,
 +	0x1b, 0xb0, 0x39, 0x8d, 0xa6, 0x51, 0xa9, 0x14, 0x8d, 0xb4, 0x51, 0xae,
-+	0xa2, 0x51, 0xbd, 0xed, 0x4b, 0xa2, 0x13, 0xa0, 0x1b, 0x20, 0xc3, 0x1b,
++	0xa2, 0x51, 0xbd, 0xed, 0x4b, 0xa2, 0x12, 0xa0, 0x1b, 0x20, 0xc2, 0x1b,
 +	0xb0, 0x22, 0x8d, 0xa7, 0x51, 0x20, 0xf6, 0x1a, 0x20, 0xa6, 0x12, 0xa9,
 +	0x00, 0x8d, 0xae, 0x51, 0xae, 0xa2, 0x51, 0xbd, 0x0d, 0x4c, 0x8d, 0xaf,
 +	0x51, 0x20, 0xbd, 0x11, 0xb0, 0x09, 0x20, 0xc1, 0x13, 0x4c, 0xd2, 0x12,
@@ -6590,124 +9349,124 @@ index 0000000..861ab02
 +	0x60, 0x0b, 0x20, 0xb8, 0x0a, 0xd2, 0x45, 0x46, 0x52, 0x45, 0x53, 0x48,
 +	0x45, 0x44, 0x00, 0x20, 0xaa, 0x0a, 0x60, 0xa9, 0xf6, 0x85, 0xfd, 0xa9,
 +	0x4c, 0x85, 0xfe, 0xad, 0xb6, 0x51, 0x8d, 0x89, 0x51, 0x60, 0xc3, 0x4f,
-+	0x4c, 0x4f, 0x55, 0x52, 0x20, 0x30, 0x2d, 0x31, 0x35, 0x3a, 0x20, 0x00,
-+	0xc6, 0x4c, 0x41, 0x53, 0x48, 0x45, 0x53, 0x20, 0x30, 0x2d, 0x32, 0x30,
-+	0x3a, 0x20, 0x00, 0xd0, 0x41, 0x54, 0x48, 0x28, 0x3f, 0x3d, 0x42, 0x52,
-+	0x4f, 0x57, 0x53, 0x45, 0x29, 0x3a, 0x20, 0x00, 0x8d, 0xb2, 0x51, 0x8e,
-+	0x7e, 0x51, 0x8c, 0x7f, 0x51, 0xa2, 0x17, 0x20, 0x51, 0x0b, 0xa9, 0xff,
-+	0x8d, 0x83, 0x51, 0xa9, 0x06, 0x20, 0x23, 0x0a, 0xad, 0x7e, 0x51, 0x85,
-+	0xfd, 0xad, 0x7f, 0x51, 0x85, 0xfe, 0xa0, 0x00, 0xb1, 0xfd, 0xf0, 0x06,
-+	0x20, 0x23, 0x0a, 0xc8, 0xd0, 0xf6, 0x8c, 0xa9, 0x51, 0xa9, 0x07, 0x20,
-+	0x23, 0x0a, 0xa9, 0x26, 0x38, 0xed, 0xa9, 0x51, 0x8d, 0xaa, 0x51, 0xae,
-+	0xb5, 0x51, 0xa9, 0xa4, 0x9d, 0xf6, 0x4d, 0xe8, 0x8e, 0x89, 0x51, 0xa9,
-+	0xf6, 0x85, 0xfd, 0xa9, 0x4d, 0x85, 0xfe, 0xad, 0xaa, 0x51, 0x20, 0x2d,
-+	0x0b, 0x20, 0x08, 0x0a, 0xc9, 0x0d, 0xf0, 0x2c, 0xc9, 0x5f, 0xf0, 0x2a,
-+	0xc9, 0x14, 0xd0, 0x0b, 0xad, 0xb5, 0x51, 0xf0, 0xec, 0xce, 0xb5, 0x51,
-+	0x4c, 0x3c, 0x1b, 0xc9, 0x20, 0x90, 0xe2, 0xc9, 0x5f, 0xb0, 0xde, 0xae,
-+	0xb5, 0x51, 0xec, 0xb2, 0x51, 0xb0, 0xd6, 0x9d, 0xf6, 0x4d, 0xee, 0xb5,
-+	0x51, 0x4c, 0x3c, 0x1b, 0x18, 0x60, 0x38, 0x60, 0x8d, 0xb3, 0x51, 0x8e,
-+	0x80, 0x51, 0x8c, 0x81, 0x51, 0xa9, 0x01, 0x8d, 0x82, 0x51, 0xa9, 0x00,
-+	0x8d, 0x8b, 0x51, 0xad, 0xb3, 0x51, 0xa2, 0x00, 0x20, 0xd7, 0x0a, 0x20,
-+	0x8c, 0x0a, 0xa2, 0x00, 0xec, 0x8b, 0x51, 0xb0, 0x09, 0xbd, 0xf7, 0x4e,
-+	0x9d, 0xf6, 0x4d, 0xe8, 0xd0, 0xf2, 0x8e, 0xb5, 0x51, 0xa9, 0x02, 0xae,
-+	0x80, 0x51, 0xac, 0x81, 0x51, 0x20, 0x33, 0x1b, 0xb0, 0x10, 0x20, 0x12,
-+	0x1c, 0xb0, 0x07, 0xcd, 0xb4, 0x51, 0x90, 0x05, 0xf0, 0x03, 0xad, 0xb3,
-+	0x51, 0x18, 0x60, 0xa0, 0x00, 0xa9, 0x00, 0x8d, 0x7a, 0x51, 0xcc, 0xb5,
-+	0x51, 0xb0, 0x32, 0xb9, 0xf6, 0x4d, 0xc9, 0x20, 0xd0, 0x03, 0xc8, 0xd0,
-+	0xf1, 0xc9, 0x2d, 0xf0, 0x29, 0xcc, 0xb5, 0x51, 0xb0, 0x1f, 0xb9, 0xf6,
-+	0x4d, 0x38, 0xe9, 0x30, 0xc9, 0x0a, 0xb0, 0x15, 0x8d, 0xab, 0x51, 0xad,
-+	0x7a, 0x51, 0x0a, 0x0a, 0x6d, 0x7a, 0x51, 0x0a, 0x6d, 0xab, 0x51, 0x8d,
-+	0x7a, 0x51, 0xc8, 0xd0, 0xdc, 0xad, 0x7a, 0x51, 0x18, 0x60, 0x38, 0x60,
-+	0xa9, 0x2f, 0x8d, 0x2d, 0x4c, 0xa9, 0x01, 0x8d, 0xb7, 0x51, 0xa9, 0x00,
-+	0x8d, 0xbb, 0x51, 0xa9, 0x00, 0x8d, 0xb8, 0x51, 0x8d, 0xb9, 0x51, 0x20,
-+	0x97, 0x1d, 0x20, 0x5d, 0x1f, 0x20, 0x08, 0x0a, 0xc9, 0x5f, 0xd0, 0x01,
-+	0x60, 0xc9, 0x91, 0xd0, 0x0b, 0xad, 0xb8, 0x51, 0xf0, 0xef, 0xce, 0xb8,
-+	0x51, 0x4c, 0xf5, 0x1c, 0xc9, 0x11, 0xd0, 0x11, 0xad, 0xb8, 0x51, 0x18,
-+	0x69, 0x01, 0xcd, 0xba, 0x51, 0xb0, 0xda, 0x8d, 0xb8, 0x51, 0x4c, 0xf5,
-+	0x1c, 0xc9, 0x0d, 0xd0, 0xd0, 0xad, 0xba, 0x51, 0xf0, 0xcb, 0xad, 0xb8,
-+	0x51, 0xd0, 0x20, 0xad, 0xb7, 0x51, 0xc9, 0x02, 0x90, 0x19, 0xac, 0xb7,
-+	0x51, 0x88, 0xb9, 0x2d, 0x4c, 0xc9, 0x2f, 0xd0, 0xf8, 0x8c, 0xb7, 0x51,
-+	0x98, 0xd0, 0xa0, 0xa9, 0x01, 0x8d, 0xb7, 0x51, 0x4c, 0x66, 0x1c, 0x20,
-+	0x1a, 0x1d, 0xb0, 0xa1, 0xae, 0xb8, 0x51, 0xbd, 0xa4, 0x49, 0xd0, 0x14,
-+	0xa0, 0x00, 0xb9, 0xf6, 0x4c, 0x99, 0x2d, 0x4c, 0xc8, 0xcc, 0xb6, 0x51,
-+	0x90, 0xf4, 0x8c, 0xb7, 0x51, 0x4c, 0x66, 0x1c, 0xa9, 0x01, 0x8d, 0xbb,
-+	0x51, 0x60, 0xad, 0xb8, 0x51, 0xcd, 0xb9, 0x51, 0xb0, 0x03, 0x8d, 0xb9,
-+	0x51, 0xad, 0xb9, 0x51, 0x18, 0x69, 0x10, 0x8d, 0xa9, 0x51, 0xad, 0xb8,
-+	0x51, 0xcd, 0xa9, 0x51, 0x90, 0x06, 0x38, 0xe9, 0x0f, 0x8d, 0xb9, 0x51,
-+	0x4c, 0x71, 0x1c, 0xad, 0xb8, 0x51, 0x20, 0x73, 0x1d, 0xad, 0xb7, 0x51,
-+	0x18, 0x6d, 0x89, 0x51, 0xc9, 0xc8, 0xb0, 0x2f, 0xa0, 0x00, 0xb9, 0x2d,
-+	0x4c, 0x99, 0xf6, 0x4c, 0xc8, 0xcc, 0xb7, 0x51, 0x90, 0xf4, 0xc0, 0x02,
-+	0x90, 0x06, 0xa9, 0x2f, 0x99, 0xf6, 0x4c, 0xc8, 0x98, 0xaa, 0xa0, 0x00,
-+	0xcc, 0x89, 0x51, 0xb0, 0x09, 0xb1, 0xfd, 0x9d, 0xf6, 0x4c, 0xe8, 0xc8,
-+	0xd0, 0xf2, 0x8e, 0xb6, 0x51, 0x18, 0x60, 0x20, 0x60, 0x0b, 0x20, 0xb8,
-+	0x0a, 0xd0, 0x41, 0x54, 0x48, 0x20, 0x54, 0x4f, 0x4f, 0x20, 0x4c, 0x4f,
-+	0x4e, 0x47, 0x00, 0x20, 0xaa, 0x0a, 0x38, 0x60, 0xaa, 0xbd, 0x40, 0x49,
-+	0x8d, 0x89, 0x51, 0x86, 0xfd, 0xa9, 0x00, 0x85, 0xfe, 0xa0, 0x04, 0x06,
-+	0xfd, 0x26, 0xfe, 0x88, 0xd0, 0xf9, 0x18, 0xa5, 0xfd, 0x69, 0x00, 0x85,
-+	0xfd, 0xa5, 0xfe, 0x69, 0x43, 0x85, 0xfe, 0x60, 0xa9, 0x00, 0x8d, 0xba,
-+	0x51, 0xad, 0xb7, 0x51, 0xc9, 0x02, 0x90, 0x1b, 0xa9, 0x00, 0x20, 0x73,
-+	0x1d, 0xa9, 0x2e, 0xa0, 0x00, 0x91, 0xfd, 0xc8, 0x91, 0xfd, 0xa9, 0x02,
-+	0x8d, 0x40, 0x49, 0xa9, 0x00, 0x8d, 0xa4, 0x49, 0xee, 0xba, 0x51, 0x20,
-+	0x92, 0x0a, 0x20, 0xb8, 0x0a, 0x24, 0x00, 0xa9, 0x2d, 0x85, 0xfd, 0xa9,
-+	0x4c, 0x85, 0xfe, 0xad, 0xb7, 0x51, 0x8d, 0x89, 0x51, 0x20, 0x14, 0x0b,
-+	0xae, 0xb7, 0x51, 0xbd, 0x2c, 0x4c, 0xc9, 0x2f, 0xf0, 0x05, 0xa9, 0x2f,
-+	0x20, 0x23, 0x0a, 0x20, 0x8c, 0x0a, 0x20, 0x78, 0x0c, 0x90, 0x3b, 0xad,
-+	0x9f, 0x51, 0xd0, 0x12, 0xa9, 0x01, 0xae, 0x93, 0x51, 0xa0, 0x00, 0x20,
-+	0xf8, 0x09, 0x20, 0x2c, 0x0d, 0xad, 0x9f, 0x51, 0xf0, 0x1f, 0xa9, 0x01,
-+	0x20, 0xc3, 0xff, 0x20, 0x60, 0x0b, 0x20, 0xb8, 0x0a, 0xc3, 0x41, 0x4e,
-+	0x4e, 0x4f, 0x54, 0x20, 0x4c, 0x49, 0x53, 0x54, 0x3a, 0x20, 0x00, 0x20,
-+	0x91, 0x0d, 0x4c, 0xaa, 0x0a, 0xa2, 0x01, 0x20, 0xc6, 0xff, 0xa9, 0x00,
-+	0x85, 0x90, 0x20, 0xc5, 0x0c, 0x20, 0xc5, 0x0c, 0x20, 0xc5, 0x0c, 0x8d,
-+	0xa9, 0x51, 0x20, 0xc5, 0x0c, 0x0d, 0xa9, 0x51, 0x8d, 0xa9, 0x51, 0xa5,
-+	0x90, 0x29, 0xbf, 0xd0, 0x42, 0xad, 0xa9, 0x51, 0xf0, 0x3d, 0x20, 0xc5,
-+	0x0c, 0x20, 0xc5, 0x0c, 0xa9, 0x00, 0x8d, 0x99, 0x51, 0x20, 0xc5, 0x0c,
-+	0x8d, 0x9b, 0x51, 0xa5, 0x90, 0x8d, 0x9c, 0x51, 0x29, 0xbf, 0xd0, 0x23,
-+	0xad, 0x9b, 0x51, 0xf0, 0x14, 0xac, 0x99, 0x51, 0xc0, 0x3c, 0xb0, 0x06,
-+	0x99, 0xf7, 0x50, 0xee, 0x99, 0x51, 0xad, 0x9c, 0x51, 0x29, 0x40, 0xf0,
-+	0xd8, 0x20, 0x92, 0x1e, 0xad, 0x9c, 0x51, 0x29, 0x40, 0xf0, 0xa9, 0x20,
-+	0xcc, 0xff, 0xa9, 0x01, 0x4c, 0xc3, 0xff, 0xac, 0x99, 0x51, 0xa9, 0x00,
-+	0x99, 0xf7, 0x50, 0x8d, 0xbc, 0x51, 0xa0, 0x00, 0xcc, 0x99, 0x51, 0xb0,
-+	0x71, 0xb9, 0xf7, 0x50, 0xc8, 0xc9, 0x22, 0xd0, 0xf3, 0xae, 0xbc, 0x51,
-+	0xd0, 0x06, 0x8c, 0xbc, 0x51, 0x4c, 0x9f, 0x1e, 0x88, 0x8c, 0xbd, 0x51,
-+	0x98, 0x38, 0xed, 0xbc, 0x51, 0x8d, 0xbe, 0x51, 0xad, 0xbe, 0x51, 0xf0,
-+	0x12, 0x18, 0x6d, 0xbc, 0x51, 0xa8, 0xb9, 0xf6, 0x50, 0xc9, 0x20, 0xd0,
-+	0x06, 0xce, 0xbe, 0x51, 0x4c, 0xc3, 0x1e, 0xac, 0xbd, 0x51, 0xc8, 0xb9,
-+	0xf7, 0x50, 0xc9, 0x20, 0xd0, 0x03, 0xc8, 0xd0, 0xf6, 0x8c, 0xa9, 0x51,
-+	0xa2, 0x00, 0x8e, 0xaa, 0x51, 0xac, 0xa9, 0x51, 0xb9, 0xf7, 0x50, 0xdd,
-+	0x51, 0x1f, 0xd0, 0x10, 0xb9, 0xf8, 0x50, 0xdd, 0x52, 0x1f, 0xd0, 0x08,
-+	0xb9, 0xf9, 0x50, 0xdd, 0x53, 0x1f, 0xf0, 0x0b, 0xee, 0xaa, 0x51, 0xe8,
-+	0xe8, 0xe8, 0xe0, 0x0c, 0x90, 0xdb, 0x60, 0xad, 0xba, 0x51, 0xc9, 0x64,
-+	0xb0, 0xf8, 0x20, 0x73, 0x1d, 0xae, 0xba, 0x51, 0xad, 0xaa, 0x51, 0x9d,
-+	0xa4, 0x49, 0xad, 0xbe, 0x51, 0xc9, 0x11, 0x90, 0x02, 0xa9, 0x10, 0x9d,
-+	0x40, 0x49, 0x8d, 0x89, 0x51, 0xa0, 0x00, 0xcc, 0x89, 0x51, 0xb0, 0x0e,
-+	0x98, 0x18, 0x6d, 0xbc, 0x51, 0xaa, 0xbd, 0xf7, 0x50, 0x91, 0xfd, 0xc8,
-+	0xd0, 0xed, 0xee, 0xba, 0x51, 0x60, 0x44, 0x49, 0x52, 0x44, 0x36, 0x34,
-+	0x44, 0x37, 0x31, 0x44, 0x38, 0x31, 0xa2, 0x03, 0x20, 0x57, 0x0b, 0x20,
-+	0xb8, 0x0a, 0x06, 0xc2, 0x52, 0x4f, 0x57, 0x53, 0x45, 0x3a, 0x20, 0x07,
-+	0x00, 0xa9, 0x2d, 0x85, 0xfd, 0xa9, 0x4c, 0x85, 0xfe, 0xad, 0xb7, 0x51,
-+	0x8d, 0x89, 0x51, 0x20, 0x14, 0x0b, 0x20, 0xaa, 0x0a, 0xa9, 0x00, 0x8d,
-+	0xa5, 0x51, 0xad, 0xb9, 0x51, 0x18, 0x6d, 0xa5, 0x51, 0x8d, 0xa4, 0x51,
-+	0xad, 0xa5, 0x51, 0x18, 0x69, 0x04, 0xaa, 0x20, 0x57, 0x0b, 0xad, 0xa4,
-+	0x51, 0xcd, 0xba, 0x51, 0x90, 0x06, 0x20, 0xaa, 0x0a, 0x4c, 0x15, 0x20,
-+	0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20, 0xb8, 0x0a, 0x05, 0x00, 0xa9, 0x20,
-+	0xae, 0xa4, 0x51, 0xec, 0xb8, 0x51, 0xd0, 0x02, 0xa9, 0x3e, 0x20, 0x23,
-+	0x0a, 0x20, 0xb8, 0x0a, 0x07, 0x00, 0xad, 0xa4, 0x51, 0xcd, 0xb8, 0x51,
-+	0xd0, 0x05, 0xa9, 0x12, 0x20, 0x23, 0x0a, 0xad, 0xa4, 0x51, 0x20, 0x73,
-+	0x1d, 0xa9, 0x11, 0x20, 0x24, 0x0b, 0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20,
-+	0xb8, 0x0a, 0x92, 0x06, 0x20, 0x00, 0xae, 0xa4, 0x51, 0xbd, 0xa4, 0x49,
-+	0x8d, 0xa9, 0x51, 0x0a, 0x6d, 0xa9, 0x51, 0xaa, 0xbd, 0x51, 0x1f, 0x20,
-+	0x9d, 0x0a, 0xbd, 0x52, 0x1f, 0x20, 0x9d, 0x0a, 0xbd, 0x53, 0x1f, 0x20,
-+	0x9d, 0x0a, 0xa9, 0x11, 0x8d, 0x83, 0x51, 0x20, 0xaa, 0x0a, 0xee, 0xa5,
-+	0x51, 0xad, 0xa5, 0x51, 0xc9, 0x10, 0xb0, 0x03, 0x4c, 0x89, 0x1f, 0xa2,
-+	0x15, 0x20, 0x57, 0x0b, 0x20, 0xb8, 0x0a, 0x12, 0x05, 0xd2, 0x45, 0x54,
-+	0x55, 0x52, 0x4e, 0x92, 0x06, 0x20, 0xcf, 0x50, 0x45, 0x4e, 0x2f, 0xd3,
-+	0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x20, 0x12, 0x05, 0x5f, 0x92, 0x06,
-+	0x20, 0xc3, 0x41, 0x4e, 0x43, 0x45, 0x4c, 0x00, 0x20, 0xaa, 0x0a, 0xa2,
-+	0x16, 0x20, 0x57, 0x0b, 0x20, 0xaa, 0x0a, 0xa2, 0x17, 0x20, 0x57, 0x0b,
-+	0x4c, 0xaa, 0x0a, 0x3c, 0x08, 0x06, 0x9f, 0x09, 0x00, 0xa6, 0x09, 0x03,
-+	0xad, 0x09, 0x03, 0x2e, 0x0c, 0x01, 0x3e, 0x0c, 0x00, 0x49, 0x0c, 0x03,
-+	0x64, 0x0c, 0x04, 0x67, 0x0c, 0x04, 0x6f, 0x0c, 0x02, 0x72, 0x0c, 0x02,
-+	0x99, 0x0c, 0x05, 0x9f, 0x0c, 0x01
++	0x4c, 0x4f, 0x52, 0x20, 0x30, 0x2d, 0x31, 0x35, 0x3a, 0x20, 0x00, 0xc6,
++	0x4c, 0x41, 0x53, 0x48, 0x45, 0x53, 0x20, 0x30, 0x2d, 0x32, 0x30, 0x3a,
++	0x20, 0x00, 0xd0, 0x41, 0x54, 0x48, 0x28, 0x3f, 0x3d, 0x42, 0x52, 0x4f,
++	0x57, 0x53, 0x45, 0x29, 0x3a, 0x20, 0x00, 0x8d, 0xb2, 0x51, 0x8e, 0x7e,
++	0x51, 0x8c, 0x7f, 0x51, 0xa2, 0x17, 0x20, 0x51, 0x0b, 0xa9, 0xff, 0x8d,
++	0x83, 0x51, 0xa9, 0x06, 0x20, 0x23, 0x0a, 0xad, 0x7e, 0x51, 0x85, 0xfd,
++	0xad, 0x7f, 0x51, 0x85, 0xfe, 0xa0, 0x00, 0xb1, 0xfd, 0xf0, 0x06, 0x20,
++	0x23, 0x0a, 0xc8, 0xd0, 0xf6, 0x8c, 0xa9, 0x51, 0xa9, 0x07, 0x20, 0x23,
++	0x0a, 0xa9, 0x26, 0x38, 0xed, 0xa9, 0x51, 0x8d, 0xaa, 0x51, 0xae, 0xb5,
++	0x51, 0xa9, 0xa4, 0x9d, 0xf6, 0x4d, 0xe8, 0x8e, 0x89, 0x51, 0xa9, 0xf6,
++	0x85, 0xfd, 0xa9, 0x4d, 0x85, 0xfe, 0xad, 0xaa, 0x51, 0x20, 0x2d, 0x0b,
++	0x20, 0x08, 0x0a, 0xc9, 0x0d, 0xf0, 0x2c, 0xc9, 0x5f, 0xf0, 0x2a, 0xc9,
++	0x14, 0xd0, 0x0b, 0xad, 0xb5, 0x51, 0xf0, 0xec, 0xce, 0xb5, 0x51, 0x4c,
++	0x3b, 0x1b, 0xc9, 0x20, 0x90, 0xe2, 0xc9, 0x5f, 0xb0, 0xde, 0xae, 0xb5,
++	0x51, 0xec, 0xb2, 0x51, 0xb0, 0xd6, 0x9d, 0xf6, 0x4d, 0xee, 0xb5, 0x51,
++	0x4c, 0x3b, 0x1b, 0x18, 0x60, 0x38, 0x60, 0x8d, 0xb3, 0x51, 0x8e, 0x80,
++	0x51, 0x8c, 0x81, 0x51, 0xa9, 0x01, 0x8d, 0x82, 0x51, 0xa9, 0x00, 0x8d,
++	0x8b, 0x51, 0xad, 0xb3, 0x51, 0xa2, 0x00, 0x20, 0xd7, 0x0a, 0x20, 0x8c,
++	0x0a, 0xa2, 0x00, 0xec, 0x8b, 0x51, 0xb0, 0x09, 0xbd, 0xf7, 0x4e, 0x9d,
++	0xf6, 0x4d, 0xe8, 0xd0, 0xf2, 0x8e, 0xb5, 0x51, 0xa9, 0x02, 0xae, 0x80,
++	0x51, 0xac, 0x81, 0x51, 0x20, 0x32, 0x1b, 0xb0, 0x10, 0x20, 0x11, 0x1c,
++	0xb0, 0x07, 0xcd, 0xb4, 0x51, 0x90, 0x05, 0xf0, 0x03, 0xad, 0xb3, 0x51,
++	0x18, 0x60, 0xa0, 0x00, 0xa9, 0x00, 0x8d, 0x7a, 0x51, 0xcc, 0xb5, 0x51,
++	0xb0, 0x32, 0xb9, 0xf6, 0x4d, 0xc9, 0x20, 0xd0, 0x03, 0xc8, 0xd0, 0xf1,
++	0xc9, 0x2d, 0xf0, 0x29, 0xcc, 0xb5, 0x51, 0xb0, 0x1f, 0xb9, 0xf6, 0x4d,
++	0x38, 0xe9, 0x30, 0xc9, 0x0a, 0xb0, 0x15, 0x8d, 0xab, 0x51, 0xad, 0x7a,
++	0x51, 0x0a, 0x0a, 0x6d, 0x7a, 0x51, 0x0a, 0x6d, 0xab, 0x51, 0x8d, 0x7a,
++	0x51, 0xc8, 0xd0, 0xdc, 0xad, 0x7a, 0x51, 0x18, 0x60, 0x38, 0x60, 0xa9,
++	0x2f, 0x8d, 0x2d, 0x4c, 0xa9, 0x01, 0x8d, 0xb7, 0x51, 0xa9, 0x00, 0x8d,
++	0xbb, 0x51, 0xa9, 0x00, 0x8d, 0xb8, 0x51, 0x8d, 0xb9, 0x51, 0x20, 0x96,
++	0x1d, 0x20, 0x5c, 0x1f, 0x20, 0x08, 0x0a, 0xc9, 0x5f, 0xd0, 0x01, 0x60,
++	0xc9, 0x91, 0xd0, 0x0b, 0xad, 0xb8, 0x51, 0xf0, 0xef, 0xce, 0xb8, 0x51,
++	0x4c, 0xf4, 0x1c, 0xc9, 0x11, 0xd0, 0x11, 0xad, 0xb8, 0x51, 0x18, 0x69,
++	0x01, 0xcd, 0xba, 0x51, 0xb0, 0xda, 0x8d, 0xb8, 0x51, 0x4c, 0xf4, 0x1c,
++	0xc9, 0x0d, 0xd0, 0xd0, 0xad, 0xba, 0x51, 0xf0, 0xcb, 0xad, 0xb8, 0x51,
++	0xd0, 0x20, 0xad, 0xb7, 0x51, 0xc9, 0x02, 0x90, 0x19, 0xac, 0xb7, 0x51,
++	0x88, 0xb9, 0x2d, 0x4c, 0xc9, 0x2f, 0xd0, 0xf8, 0x8c, 0xb7, 0x51, 0x98,
++	0xd0, 0xa0, 0xa9, 0x01, 0x8d, 0xb7, 0x51, 0x4c, 0x65, 0x1c, 0x20, 0x19,
++	0x1d, 0xb0, 0xa1, 0xae, 0xb8, 0x51, 0xbd, 0xa4, 0x49, 0xd0, 0x14, 0xa0,
++	0x00, 0xb9, 0xf6, 0x4c, 0x99, 0x2d, 0x4c, 0xc8, 0xcc, 0xb6, 0x51, 0x90,
++	0xf4, 0x8c, 0xb7, 0x51, 0x4c, 0x65, 0x1c, 0xa9, 0x01, 0x8d, 0xbb, 0x51,
++	0x60, 0xad, 0xb8, 0x51, 0xcd, 0xb9, 0x51, 0xb0, 0x03, 0x8d, 0xb9, 0x51,
++	0xad, 0xb9, 0x51, 0x18, 0x69, 0x10, 0x8d, 0xa9, 0x51, 0xad, 0xb8, 0x51,
++	0xcd, 0xa9, 0x51, 0x90, 0x06, 0x38, 0xe9, 0x0f, 0x8d, 0xb9, 0x51, 0x4c,
++	0x70, 0x1c, 0xad, 0xb8, 0x51, 0x20, 0x72, 0x1d, 0xad, 0xb7, 0x51, 0x18,
++	0x6d, 0x89, 0x51, 0xc9, 0xc8, 0xb0, 0x2f, 0xa0, 0x00, 0xb9, 0x2d, 0x4c,
++	0x99, 0xf6, 0x4c, 0xc8, 0xcc, 0xb7, 0x51, 0x90, 0xf4, 0xc0, 0x02, 0x90,
++	0x06, 0xa9, 0x2f, 0x99, 0xf6, 0x4c, 0xc8, 0x98, 0xaa, 0xa0, 0x00, 0xcc,
++	0x89, 0x51, 0xb0, 0x09, 0xb1, 0xfd, 0x9d, 0xf6, 0x4c, 0xe8, 0xc8, 0xd0,
++	0xf2, 0x8e, 0xb6, 0x51, 0x18, 0x60, 0x20, 0x60, 0x0b, 0x20, 0xb8, 0x0a,
++	0xd0, 0x41, 0x54, 0x48, 0x20, 0x54, 0x4f, 0x4f, 0x20, 0x4c, 0x4f, 0x4e,
++	0x47, 0x00, 0x20, 0xaa, 0x0a, 0x38, 0x60, 0xaa, 0xbd, 0x40, 0x49, 0x8d,
++	0x89, 0x51, 0x86, 0xfd, 0xa9, 0x00, 0x85, 0xfe, 0xa0, 0x04, 0x06, 0xfd,
++	0x26, 0xfe, 0x88, 0xd0, 0xf9, 0x18, 0xa5, 0xfd, 0x69, 0x00, 0x85, 0xfd,
++	0xa5, 0xfe, 0x69, 0x43, 0x85, 0xfe, 0x60, 0xa9, 0x00, 0x8d, 0xba, 0x51,
++	0xad, 0xb7, 0x51, 0xc9, 0x02, 0x90, 0x1b, 0xa9, 0x00, 0x20, 0x72, 0x1d,
++	0xa9, 0x2e, 0xa0, 0x00, 0x91, 0xfd, 0xc8, 0x91, 0xfd, 0xa9, 0x02, 0x8d,
++	0x40, 0x49, 0xa9, 0x00, 0x8d, 0xa4, 0x49, 0xee, 0xba, 0x51, 0x20, 0x92,
++	0x0a, 0x20, 0xb8, 0x0a, 0x24, 0x00, 0xa9, 0x2d, 0x85, 0xfd, 0xa9, 0x4c,
++	0x85, 0xfe, 0xad, 0xb7, 0x51, 0x8d, 0x89, 0x51, 0x20, 0x14, 0x0b, 0xae,
++	0xb7, 0x51, 0xbd, 0x2c, 0x4c, 0xc9, 0x2f, 0xf0, 0x05, 0xa9, 0x2f, 0x20,
++	0x23, 0x0a, 0x20, 0x8c, 0x0a, 0x20, 0x78, 0x0c, 0x90, 0x3b, 0xad, 0x9f,
++	0x51, 0xd0, 0x12, 0xa9, 0x01, 0xae, 0x93, 0x51, 0xa0, 0x00, 0x20, 0xf8,
++	0x09, 0x20, 0x2c, 0x0d, 0xad, 0x9f, 0x51, 0xf0, 0x1f, 0xa9, 0x01, 0x20,
++	0xc3, 0xff, 0x20, 0x60, 0x0b, 0x20, 0xb8, 0x0a, 0xc3, 0x41, 0x4e, 0x4e,
++	0x4f, 0x54, 0x20, 0x4c, 0x49, 0x53, 0x54, 0x3a, 0x20, 0x00, 0x20, 0x91,
++	0x0d, 0x4c, 0xaa, 0x0a, 0xa2, 0x01, 0x20, 0xc6, 0xff, 0xa9, 0x00, 0x85,
++	0x90, 0x20, 0xc5, 0x0c, 0x20, 0xc5, 0x0c, 0x20, 0xc5, 0x0c, 0x8d, 0xa9,
++	0x51, 0x20, 0xc5, 0x0c, 0x0d, 0xa9, 0x51, 0x8d, 0xa9, 0x51, 0xa5, 0x90,
++	0x29, 0xbf, 0xd0, 0x42, 0xad, 0xa9, 0x51, 0xf0, 0x3d, 0x20, 0xc5, 0x0c,
++	0x20, 0xc5, 0x0c, 0xa9, 0x00, 0x8d, 0x99, 0x51, 0x20, 0xc5, 0x0c, 0x8d,
++	0x9b, 0x51, 0xa5, 0x90, 0x8d, 0x9c, 0x51, 0x29, 0xbf, 0xd0, 0x23, 0xad,
++	0x9b, 0x51, 0xf0, 0x14, 0xac, 0x99, 0x51, 0xc0, 0x3c, 0xb0, 0x06, 0x99,
++	0xf7, 0x50, 0xee, 0x99, 0x51, 0xad, 0x9c, 0x51, 0x29, 0x40, 0xf0, 0xd8,
++	0x20, 0x91, 0x1e, 0xad, 0x9c, 0x51, 0x29, 0x40, 0xf0, 0xa9, 0x20, 0xcc,
++	0xff, 0xa9, 0x01, 0x4c, 0xc3, 0xff, 0xac, 0x99, 0x51, 0xa9, 0x00, 0x99,
++	0xf7, 0x50, 0x8d, 0xbc, 0x51, 0xa0, 0x00, 0xcc, 0x99, 0x51, 0xb0, 0x71,
++	0xb9, 0xf7, 0x50, 0xc8, 0xc9, 0x22, 0xd0, 0xf3, 0xae, 0xbc, 0x51, 0xd0,
++	0x06, 0x8c, 0xbc, 0x51, 0x4c, 0x9e, 0x1e, 0x88, 0x8c, 0xbd, 0x51, 0x98,
++	0x38, 0xed, 0xbc, 0x51, 0x8d, 0xbe, 0x51, 0xad, 0xbe, 0x51, 0xf0, 0x12,
++	0x18, 0x6d, 0xbc, 0x51, 0xa8, 0xb9, 0xf6, 0x50, 0xc9, 0x20, 0xd0, 0x06,
++	0xce, 0xbe, 0x51, 0x4c, 0xc2, 0x1e, 0xac, 0xbd, 0x51, 0xc8, 0xb9, 0xf7,
++	0x50, 0xc9, 0x20, 0xd0, 0x03, 0xc8, 0xd0, 0xf6, 0x8c, 0xa9, 0x51, 0xa2,
++	0x00, 0x8e, 0xaa, 0x51, 0xac, 0xa9, 0x51, 0xb9, 0xf7, 0x50, 0xdd, 0x50,
++	0x1f, 0xd0, 0x10, 0xb9, 0xf8, 0x50, 0xdd, 0x51, 0x1f, 0xd0, 0x08, 0xb9,
++	0xf9, 0x50, 0xdd, 0x52, 0x1f, 0xf0, 0x0b, 0xee, 0xaa, 0x51, 0xe8, 0xe8,
++	0xe8, 0xe0, 0x0c, 0x90, 0xdb, 0x60, 0xad, 0xba, 0x51, 0xc9, 0x64, 0xb0,
++	0xf8, 0x20, 0x72, 0x1d, 0xae, 0xba, 0x51, 0xad, 0xaa, 0x51, 0x9d, 0xa4,
++	0x49, 0xad, 0xbe, 0x51, 0xc9, 0x11, 0x90, 0x02, 0xa9, 0x10, 0x9d, 0x40,
++	0x49, 0x8d, 0x89, 0x51, 0xa0, 0x00, 0xcc, 0x89, 0x51, 0xb0, 0x0e, 0x98,
++	0x18, 0x6d, 0xbc, 0x51, 0xaa, 0xbd, 0xf7, 0x50, 0x91, 0xfd, 0xc8, 0xd0,
++	0xed, 0xee, 0xba, 0x51, 0x60, 0x44, 0x49, 0x52, 0x44, 0x36, 0x34, 0x44,
++	0x37, 0x31, 0x44, 0x38, 0x31, 0xa2, 0x03, 0x20, 0x57, 0x0b, 0x20, 0xb8,
++	0x0a, 0x06, 0xc2, 0x52, 0x4f, 0x57, 0x53, 0x45, 0x3a, 0x20, 0x07, 0x00,
++	0xa9, 0x2d, 0x85, 0xfd, 0xa9, 0x4c, 0x85, 0xfe, 0xad, 0xb7, 0x51, 0x8d,
++	0x89, 0x51, 0x20, 0x14, 0x0b, 0x20, 0xaa, 0x0a, 0xa9, 0x00, 0x8d, 0xa5,
++	0x51, 0xad, 0xb9, 0x51, 0x18, 0x6d, 0xa5, 0x51, 0x8d, 0xa4, 0x51, 0xad,
++	0xa5, 0x51, 0x18, 0x69, 0x04, 0xaa, 0x20, 0x57, 0x0b, 0xad, 0xa4, 0x51,
++	0xcd, 0xba, 0x51, 0x90, 0x06, 0x20, 0xaa, 0x0a, 0x4c, 0x14, 0x20, 0xa9,
++	0xff, 0x8d, 0x83, 0x51, 0x20, 0xb8, 0x0a, 0x05, 0x00, 0xa9, 0x20, 0xae,
++	0xa4, 0x51, 0xec, 0xb8, 0x51, 0xd0, 0x02, 0xa9, 0x3e, 0x20, 0x23, 0x0a,
++	0x20, 0xb8, 0x0a, 0x07, 0x00, 0xad, 0xa4, 0x51, 0xcd, 0xb8, 0x51, 0xd0,
++	0x05, 0xa9, 0x12, 0x20, 0x23, 0x0a, 0xad, 0xa4, 0x51, 0x20, 0x72, 0x1d,
++	0xa9, 0x11, 0x20, 0x24, 0x0b, 0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20, 0xb8,
++	0x0a, 0x92, 0x06, 0x20, 0x00, 0xae, 0xa4, 0x51, 0xbd, 0xa4, 0x49, 0x8d,
++	0xa9, 0x51, 0x0a, 0x6d, 0xa9, 0x51, 0xaa, 0xbd, 0x50, 0x1f, 0x20, 0x9d,
++	0x0a, 0xbd, 0x51, 0x1f, 0x20, 0x9d, 0x0a, 0xbd, 0x52, 0x1f, 0x20, 0x9d,
++	0x0a, 0xa9, 0x11, 0x8d, 0x83, 0x51, 0x20, 0xaa, 0x0a, 0xee, 0xa5, 0x51,
++	0xad, 0xa5, 0x51, 0xc9, 0x10, 0xb0, 0x03, 0x4c, 0x88, 0x1f, 0xa2, 0x15,
++	0x20, 0x57, 0x0b, 0x20, 0xb8, 0x0a, 0x12, 0x05, 0xd2, 0x45, 0x54, 0x55,
++	0x52, 0x4e, 0x92, 0x06, 0x20, 0xcf, 0x50, 0x45, 0x4e, 0x2f, 0xd3, 0x45,
++	0x4c, 0x45, 0x43, 0x54, 0x20, 0x20, 0x12, 0x05, 0x5f, 0x92, 0x06, 0x20,
++	0xc3, 0x41, 0x4e, 0x43, 0x45, 0x4c, 0x00, 0x20, 0xaa, 0x0a, 0xa2, 0x16,
++	0x20, 0x57, 0x0b, 0x20, 0xaa, 0x0a, 0xa2, 0x17, 0x20, 0x57, 0x0b, 0x4c,
++	0xaa, 0x0a, 0x3c, 0x08, 0x06, 0x9f, 0x09, 0x00, 0xa6, 0x09, 0x03, 0xad,
++	0x09, 0x03, 0x2e, 0x0c, 0x01, 0x3e, 0x0c, 0x00, 0x49, 0x0c, 0x03, 0x64,
++	0x0c, 0x04, 0x67, 0x0c, 0x04, 0x6f, 0x0c, 0x02, 0x72, 0x0c, 0x02, 0x99,
++	0x0c, 0x05, 0x9f, 0x0c, 0x01
 +};
 +
 +#endif /* TDCONFIG_PRG_H */
@@ -6747,3 +9506,1003 @@ index 6703f99..0ca31c8 100644
     //future use:
     for(uint32_t EEPByteNum = 0; EEPByteNum<eepAdUnusedSize ; EEPByteNum++)
        EEPROM.write(eepAdUnused+EEPByteNum, 0);
+diff --git a/Source/Teensy/tests/tdrive-io.test.js b/Source/Teensy/tests/tdrive-io.test.js
+new file mode 100644
+index 0000000..e393418
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive-io.test.js
+@@ -0,0 +1,69 @@
++// SPDX-License-Identifier: MIT
++// The TDrive mailbox's fast LOAD / SAVE / VERIFY paths (tdrive_io.c), as the TDrive KERNAL drives them.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { spawnSync } from 'node:child_process';
++
++import { commandExists } from '../../../tools/lib/toolchain.mjs';
++
++const HARNESS_SOURCE = path.join(import.meta.dirname, 'tdrive_io_harness.c');
++
++const NOT_CI = ['', '0', 'false'];
++const inCi = !NOT_CI.includes(process.env.CI ?? '');
++const skip = !commandExists('cc') && !inCi && 'cc is not on PATH';
++
++let harnessPath;
++function harness() {
++  if (harnessPath) return harnessPath;
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tdrive-io-'));
++  harnessPath = path.join(dir, 'harness');
++  const built = spawnSync('cc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-o', harnessPath, HARNESS_SOURCE], { encoding: 'utf8' });
++  assert.equal(built.status, 0, built.stderr);
++  return harnessPath;
++}
++
++function run(...args) {
++  const ran = spawnSync(harness(), args, { encoding: 'utf8' });
++  assert.equal(ran.status, 0, ran.stderr);
++  return ran.stdout.trim();
++}
++
++const NOTMINE = 'a5';
++const ROOM = 0xd000 - 0x0801;   // a file loading at $0801 can be compared up to $CFFF
++const DMA_PART = 2048;
++
++test('VERIFY of a file that fits is taken by the fast path', { skip }, () => {
++  assert.match(run('verify', '30000'), / stat=5a$/);
++});
++
++// The file's two load-address bytes are not loaded: ROOM + 2 ends at $CFFF, one more byte would need $D000.
++test('VERIFY takes a file ending at $CFFF and hands back one a byte longer', { skip }, () => {
++  assert.match(run('verify', String(ROOM + 2)), / stat=5a$/);
++  assert.match(run('verify', String(ROOM + 3)), new RegExp(` stat=${NOTMINE}$`));
++});
++
++// One mailbox command stalls the whole main loop (ASID, TCP, remote commands) for as long as it reads, and a card file has no
++// size limit: the length pass stops once the file is known not to fit.
++test('VERIFY of a file too long for RAM is handed back without reading the whole file', { skip }, () => {
++  const [read, stat] = run('verify', String(4_000_000)).split(' ');
++  assert.equal(stat, `stat=${NOTMINE}`);
++  assert.ok(Number(read.slice('read='.length)) <= ROOM + DMA_PART, read);
++});
++
++// The device number a fast SAVE / LOAD was opened on can move before it ends (a U0> on the command channel, the bus scan). The
++// transfer stays on its unit: before, the close looked the unit up by the old number, read v->unit[-1], left channel 1 open
++// and the file unfinished, and a LOAD read zeros with no end.
++test('a fast SAVE closes cleanly when its device is renumbered with U0> before the close', { skip }, () => {
++  assert.equal(run('save', 'renumber'), 'close=5a data=0 open=0 blocks=1');
++});
++
++test('a fast SAVE closes cleanly when the bus scan releases its device number before the close', { skip }, () => {
++  assert.equal(run('save', 'scan'), 'close=5a data=0 open=0 blocks=1');
++});
++
++test('a fast LOAD ends with its file when its device is renumbered after the open', { skip }, () => {
++  assert.equal(run('load'), 'bytes=598 end=1');   // 600 bytes, the first two came with the open as the load address
++});
+diff --git a/Source/Teensy/tests/tdrive-mount.test.js b/Source/Teensy/tests/tdrive-mount.test.js
+new file mode 100644
+index 0000000..20c46de
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive-mount.test.js
+@@ -0,0 +1,50 @@
++// SPDX-License-Identifier: MIT
++// TDrive's remote image selection: the host app's set, and the sidecar the next start mounts from.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { spawnSync } from 'node:child_process';
++
++import { commandExists } from '../../../tools/lib/toolchain.mjs';
++
++const HARNESS_SOURCE = path.join(import.meta.dirname, 'tdrive_mount_harness.cpp');
++
++const NOT_CI = ['', '0', 'false'];
++const inCi = !NOT_CI.includes(process.env.CI ?? '');
++const skip = !commandExists('c++') && !inCi && 'c++ is not on PATH';
++
++let harnessPath;
++function harness() {
++  if (harnessPath) return harnessPath;
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tdrive-mount-'));
++  harnessPath = path.join(dir, 'harness');
++  // the handler's callbacks take a context they do not all use, as the firmware's own build allows
++  const built = spawnSync('c++', ['-std=gnu++17', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unused-function',
++    '-Wno-format-truncation', '-o', harnessPath, HARNESS_SOURCE], { encoding: 'utf8' });
++  assert.equal(built.status, 0, built.stderr);
++  return harnessPath;
++}
++
++function run(lines) {
++  const ran = spawnSync(harness(), { input: lines.join('\n') + '\n', encoding: 'utf8' });
++  assert.equal(ran.status, 0, ran.stderr);
++  return ran.stdout.split(/\r?\n/).filter(Boolean);
++}
++
++const D64_SIZE = 174848;
++
++test('a remote set mounts a disk image', { skip }, () => {
++  assert.deepEqual(run([`file /GAME.D64 ${D64_SIZE}`, 'set /GAME.D64']), ['0 /GAME.D64']);
++});
++
++// The format comes from the size alone, so a 1 MB cartridge mounted as a writable D81 and a SAVE wrote sectors into it.
++test('a remote set refuses a file that is not a disk image, and the mounted disk stays', { skip }, () => {
++  assert.deepEqual(run([`file /GAME.D64 ${D64_SIZE}`, 'file /BIG.CRT 1048576', 'set /GAME.D64', 'set /BIG.CRT']),
++    ['0 /GAME.D64', '74 /GAME.D64 : not a disk image']);
++});
++
++test('with the menu showing, a set never remembers a file that is not a disk image', { skip }, () => {
++  assert.deepEqual(run(['file /BIG.CRT 1048576', 'idle /BIG.CRT']), ['74 none : not a disk image']);
++});
+diff --git a/Source/Teensy/tests/tdrive-reu.test.js b/Source/Teensy/tests/tdrive-reu.test.js
+new file mode 100644
+index 0000000..8e890ca
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive-reu.test.js
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: MIT
++// The REU under "TDrive+REU" / "TDrive+Swift+REU": its $FF00 trigger shares the bus snoop with the replacement KERNAL's check.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { spawnSync } from 'node:child_process';
++
++import { commandExists } from '../../../tools/lib/toolchain.mjs';
++
++const HARNESS_SOURCE = path.join(import.meta.dirname, 'tdrive_reu_harness.cpp');
++
++const NOT_CI = ['', '0', 'false'];
++const inCi = !NOT_CI.includes(process.env.CI ?? '');
++const skip = !commandExists('c++') && !inCi && 'c++ is not on PATH';
++
++let harnessPath;
++function harness() {
++  if (harnessPath) return harnessPath;
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tdrive-reu-'));
++  harnessPath = path.join(dir, 'harness');
++  // the REU's DMA loops spin on an empty body, which the firmware's own build allows
++  const built = spawnSync('c++', ['-std=gnu++17', '-Wall', '-Wextra', '-Werror', '-Wno-empty-body', '-o', harnessPath,
++    HARNESS_SOURCE], { encoding: 'utf8' });
++  assert.equal(built.status, 0, built.stderr);
++  return harnessPath;
++}
++
++function run(lines) {
++  const ran = spawnSync(harness(), { input: lines.join('\n') + '\n', encoding: 'utf8' });
++  assert.equal(ran.status, 0, ran.stderr);
++  return ran.stdout.split(/\r?\n/).filter(Boolean);
++}
++
++const COMMAND = 0x01;
++const command = (value) => [`d ${value.toString(16)}`, `w ${COMMAND.toString(16)}`];
++const ARMED = 0x80;      // execute, on the next store to $FF00
++const IMMEDIATE = 0x90;  // execute now ($FF00 decode off)
++
++test('a command on the $FF00 trigger keeps the KERNAL served and starts on the store', { skip }, () => {
++  assert.deepEqual(run(['kernal 0', ...command(ARMED), 'snoop 0', 'ff00 0', 'snoop 0']), ['armed', 'transfer', 'kernal']);
++});
++
++// As on the plain REU (IOH_REU.c): an immediate command replaces an armed one, so a later store to $FF00 (RAM under the
++// KERNAL) starts nothing. Left armed, it ran a second transfer with whatever the registers held.
++test('an immediate command disarms the $FF00 trigger', { skip }, () => {
++  assert.deepEqual(run(['kernal 0', ...command(ARMED), ...command(IMMEDIATE), 'snoop 0', 'ff00 0', 'snoop 0']),
++    ['kernal', 'none', 'kernal']);
++});
++
++// A program may set addresses or length after the command, or poll the status, before it stores to $FF00.
++test('register writes and reads after the command keep the $FF00 trigger armed', { skip }, () => {
++  assert.deepEqual(run(['kernal 0', ...command(ARMED), 'd 10', 'w 7', 'r 0', 'snoop 0', 'ff00 0', 'snoop 0']),
++    ['armed', 'transfer', 'kernal']);
++});
++
++test('a command on the $FF00 trigger written again stays armed', { skip }, () => {
++  assert.deepEqual(run(['kernal 0', ...command(ARMED), ...command(ARMED), 'snoop 0', 'ff00 0', 'snoop 0']),
++    ['armed', 'transfer', 'kernal']);
++});
++
++test('an immediate command with nothing armed leaves the KERNAL check alone', { skip }, () => {
++  assert.deepEqual(run(['kernal 0', ...command(IMMEDIATE), 'snoop 0']), ['kernal']);
++});
+diff --git a/Source/Teensy/tests/tdrive.test.js b/Source/Teensy/tests/tdrive.test.js
+new file mode 100644
+index 0000000..c6ce1c6
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive.test.js
+@@ -0,0 +1,78 @@
++// SPDX-License-Identifier: MIT
++// The TDrive engine (Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c), driven through its mailbox as the KERNAL does.
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { spawnSync } from 'node:child_process';
++
++import { commandExists } from '../../../tools/lib/toolchain.mjs';
++
++const FIRMWARE_ROOT = path.resolve(import.meta.dirname, '..');
++const HARNESS_SOURCE = path.join(FIRMWARE_ROOT, 'tests/tdrive_harness.c');
++
++const NOT_CI = ['', '0', 'false'];
++const inCi = !NOT_CI.includes(process.env.CI ?? '');
++const missingTool = ['cc', 'c++'].find((tool) => !commandExists(tool));
++const skip = missingTool && !inCi && `${missingTool} is not on PATH`;
++
++let harnessPath;
++function harness() {
++  if (harnessPath) return harnessPath;
++  assert.equal(missingTool, undefined, 'CI installs every tool this test needs, so it must not skip there');
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tdrive-'));
++  harnessPath = path.join(dir, 'harness');
++  const built = spawnSync('cc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-o', harnessPath, HARNESS_SOURCE], { encoding: 'utf8' });
++  assert.equal(built.status, 0, built.stderr);
++  return harnessPath;
++}
++
++const runHarness = (...args) => {
++  const ran = spawnSync(harness(), args, { encoding: 'utf8' });
++  assert.equal(ran.status, 0, ran.stderr);
++  return ran.stdout.trim();
++};
++
++test('LOAD reads back every byte of a program saved on the disk, with EOI on the last and "00, OK" after', { skip }, () => {
++  assert.equal(runHarness('load'), 'bytes=600 same=1 eoi=1 status=00, OK,00,00');
++});
++
++test('LOAD of a name that is not on the disk delivers nothing and reports 62', { skip }, () => {
++  assert.equal(runHarness('missing'), 'bytes=0 status=62,FILE NOT FOUND,00,00');
++});
++
++// OPEN 3,8,3,"SPEC": the drive prefix, the file type letter and the mode letter in the name decide what is created
++const OPEN_SPECS = [
++  ['0:NEW,S,W', 'NEW', 'status=00, OK,00,00 type=SEQ'],
++  ['NEW,P,W', 'NEW', 'status=00, OK,00,00 type=PRG'],
++  ['NEW,U,W', 'NEW', 'status=00, OK,00,00 type=USR'],
++  ['NEW,W', 'NEW', 'status=00, OK,00,00 type=SEQ'],
++  ['HELLO,S,W', 'HELLO', 'status=63,FILE EXISTS,00,00 type=PRG'],
++  ['NOPE', 'NOPE', 'status=62,FILE NOT FOUND,00,00 type=none'],
++];
++for (const [spec, name, expected] of OPEN_SPECS) {
++  test(`OPEN "${spec}" on a disk holding HELLO`, { skip }, () => {
++    assert.equal(runHarness('open', spec, name), expected);
++  });
++}
++
++const SCRATCHES = [
++  ['S:HELLO', 'status=01,FILES SCRATCHED,01,00 files=1'],
++  ['S0:HELLO*', 'status=01,FILES SCRATCHED,02,00 files=0'],
++  ['S:HELLO,0:HELLO2', 'status=01,FILES SCRATCHED,02,00 files=0'],
++  ['S:NOPE', 'status=01,FILES SCRATCHED,00,00 files=2'],
++];
++for (const [command, expected] of SCRATCHES) {
++  test(`"${command}" on a disk holding HELLO and HELLO2`, { skip }, () => {
++    assert.equal(runHarness('scratch', command), expected);
++  });
++}
++
++test('a host name the C64 cannot use gets an alias of at most 16 characters that keeps its start and end', { skip }, () => {
++  assert.equal(runHarness('alias', 'The-Pumpkins-Breadbin-of-Horror-side1.D64'), '1 THE-PU^SIDE1.D64');
++  assert.equal(runHarness('alias', 'a*b.d64'), '1 A^B.D64');
++  assert.equal(runHarness('alias', 'hello'), '0 HELLO');
++  // a last word of more than 5 characters is cut to its last 3
++  assert.equal(runHarness('alias', 'a-very-long-name-with-longerword.d64'), '1 A-VERY-L^ORD.D64');
++});
+diff --git a/Source/Teensy/tests/tdrive_harness.c b/Source/Teensy/tests/tdrive_harness.c
+new file mode 100644
+index 0000000..e1c5e28
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive_harness.c
+@@ -0,0 +1,144 @@
++// SPDX-License-Identifier: MIT
++// tdrive_harness drives the TDrive engine (MinimalBoot/Common/tdrive/tdrive.c, included, not copied) through its mailbox, as the
++//   KERNAL's serial routines do, against a D64 held in memory with unit 0 on device 8.
++// tdrive_harness load: saves a 600-byte program, LOADs it back through channel 0; prints "bytes=<n> same=<0|1> eoi=<0|1> status=<text>".
++// tdrive_harness missing: LOADs a name that is not on the disk; prints "bytes=<n> status=<text>".
++// tdrive_harness open SPEC NAME: OPENs SPEC on channel 3, as OPEN 3,8,3,"SPEC" does, on a disk that holds the program HELLO;
++//   prints "status=<text> type=<DOS file type of NAME afterward, or none>".
++// tdrive_harness scratch COMMAND: sends COMMAND on channel 15 to a disk that holds HELLO and HELLO2, then prints
++//   "status=<text> files=<number left>".
++// tdrive_harness alias NAME: prints "<td_alias return> <alias>".
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "../DiskImage/DiskImage.h"
++#include "../MinimalBoot/Common/tdrive/tdrive.c"
++
++static uint8_t Image[174848];
++static d64_mem_t Mem;
++static d64_t Disk;
++static tdrive_t Drive;
++
++static void Box(uint8_t Cmd, uint8_t Arg)
++{
++   uint8_t Data, St;
++   tdrive_mailbox(&Drive, Cmd, Arg, &Data, &St);
++}
++
++static void Send(uint8_t Channel, const char *Bytes, size_t Len)   // LISTEN, SECOND, the bytes, UNLSN
++{
++   Box(TD_LISTEN, 8);
++   Box(TD_SECOND, 0xF0 | Channel);
++   for (size_t i = 0; i < Len; i++) Box(TD_CIOUT, (uint8_t)Bytes[i]);
++   Box(TD_UNLSN, 0);
++}
++
++static void Status(char *Out, size_t Cap)   // the error channel: TALK, TKSA 15, bytes up to the CR
++{
++   uint8_t Data, St;
++   size_t n = 0;
++   Box(TD_TALK, 8);
++   Box(TD_TKSA, 0x6F);
++   do {
++      tdrive_mailbox(&Drive, TD_ACPTR, 0, &Data, &St);
++      if (Data != '\r' && n + 1 < Cap) Out[n++] = (char)Data;
++   } while (!(St & 0x40) && n < Cap);
++   Out[n] = 0;
++   Box(TD_UNTLK, 0);
++}
++
++static int Setup(void)
++{
++   memset(Image, 0, sizeof Image);
++   d64_mem_init(&Mem, Image, sizeof Image);
++   if (d64_open_mem(&Disk, &Mem) || d64_format_blank(&Disk, "TEST", "TR")) return 1;
++   tdrive_init(&Drive);
++   tdrive_attach(&Drive, 0, &Disk, 1);
++   tdrive_set_devices(&Drive, 8, 0);
++   return 0;
++}
++
++static int Save(const char *Name, const uint8_t *Data, size_t Size)
++{
++   d64_wfile_t Out;
++   if (d64_create(&Disk, Name, 2, 0, &Out) || d64_write(&Disk, &Out, Data, Size) != (int)Size) return 1;
++   return d64_close_write(&Disk, &Out);
++}
++
++static int FileType(const char *Name)
++{
++   d64_entry_t Entry;
++   return d64_find(&Disk, Name, &Entry) == 1 ? (Entry.type & 7) : -1;
++}
++
++static int Files(void)
++{
++   d64_dir_t It;
++   d64_entry_t Entry;
++   int n = 0;
++   if (d64_dir_first(&Disk, &It)) return -1;
++   while (d64_dir_next(&Disk, &It, &Entry) > 0) n += Entry.type != 0;
++   return n;
++}
++
++static size_t Load(const char *Name, uint8_t *Buf, size_t Cap, int *Eoi)   // OPEN 0,8,0,name; the bytes through TALK / TKSA $60
++{
++   uint8_t Data, St;
++   size_t n = 0;
++   *Eoi = 0;
++   Send(0, Name, strlen(Name));
++   Box(TD_TALK, 8);
++   Box(TD_TKSA, 0x60);
++   while (n < Cap) {
++      tdrive_mailbox(&Drive, TD_ACPTR, 0, &Data, &St);
++      if (St & 0x02) break;   // timeout: nothing to read on the channel
++      Buf[n++] = Data;
++      if (St & 0x40) { *Eoi = 1; break; }
++   }
++   Box(TD_UNTLK, 0);
++   return n;
++}
++
++int main(int argc, char **argv)
++{
++   char Text[64];
++   if (argc < 2 || Setup()) return 2;
++   if (!strcmp(argv[1], "load") || !strcmp(argv[1], "missing")) {
++      uint8_t Program[600], Back[700];
++      int Eoi;
++      for (int i = 0; i < (int)sizeof Program; i++) Program[i] = (uint8_t)(i * 7 + 1);
++      if (Save("HELLO", Program, sizeof Program)) return 2;
++      bool Missing = !strcmp(argv[1], "missing");
++      size_t n = Load(Missing ? "NOPE" : "HELLO", Back, sizeof Back, &Eoi);
++      Status(Text, sizeof Text);
++      if (Missing) printf("bytes=%zu status=%s\n", n, Text);
++      else printf("bytes=%zu same=%d eoi=%d status=%s\n", n, n == sizeof Program && !memcmp(Back, Program, n), Eoi, Text);
++      return 0;
++   }
++   if (!strcmp(argv[1], "open") && argc == 4) {
++      uint8_t Program[10] = { 1, 2, 3 };
++      if (Save("HELLO", Program, sizeof Program)) return 2;
++      Send(3, argv[2], strlen(argv[2]));
++      Status(Text, sizeof Text);
++      int Type = FileType(argv[3]);
++      printf("status=%s type=%s\n", Text, Type < 0 ? "none" : DIRTYPES[Type]);
++      return 0;
++   }
++   if (!strcmp(argv[1], "scratch") && argc == 3) {
++      uint8_t Program[10] = { 1, 2, 3 };
++      if (Save("HELLO", Program, sizeof Program) || Save("HELLO2", Program, sizeof Program)) return 2;
++      Send(15, argv[2], strlen(argv[2]));
++      Status(Text, sizeof Text);
++      printf("status=%s files=%d\n", Text, Files());
++      return 0;
++   }
++   if (!strcmp(argv[1], "alias") && argc == 3) {
++      char Out[17];
++      int r = td_alias(argv[2], Out);
++      printf("%d %s\n", r, Out);
++      return 0;
++   }
++   return 2;
++}
+diff --git a/Source/Teensy/tests/tdrive_io_harness.c b/Source/Teensy/tests/tdrive_io_harness.c
+new file mode 100644
+index 0000000..034f0a6
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive_io_harness.c
+@@ -0,0 +1,140 @@
++// SPDX-License-Identifier: MIT
++// tdrive_io_harness drives the TDrive mailbox's fast paths (MinimalBoot/Common/tdrive/tdrive_io.c, included, not copied) the way
++//   the TDrive KERNAL does, against a D64 held in memory on unit 0, device 8.
++// tdrive_io_harness verify SIZE: with nothing mounted, VERIFY"BIG",8,1 of a SIZE-byte card file, loading at $0801 (a DMA host);
++//   prints "read=<bytes the open read from the card> stat=<answer>".
++// tdrive_io_harness save HOW: a fast SAVE of PROG whose device number moves between the open and the close (HOW: renumber = U0>
++//   to device 10; scan = the bus scan releasing the number); prints "close=<answer> data=<DOS error> open=<channel 1 still open,
++//   0/1> blocks=<PROG's size in blocks, or -1 if not on the disk>".
++// tdrive_io_harness load: a fast LOAD of HELLO (600 bytes) whose device number moves to 10 after the open; prints
++//   "bytes=<bytes the blocks gave> end=<0/1: a block said EOI>".
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "../DiskImage/DiskImage.h"
++#include "../MinimalBoot/Common/tdrive/tdrive.c"
++#include "../MinimalBoot/Common/tdrive/tdrive_io.c"
++
++static uint8_t Image[174848];
++static d64_mem_t Mem;
++static d64_t Disk;
++static vio_t V;
++static vio_hot_t H;
++
++static uint8_t Command(uint8_t Cmd, uint8_t Arg, uint8_t Len)
++{
++   H.arg = Arg; H.len = Len;
++   vio_io1_write(&H, VIO_CMD, Cmd);
++   vio_poll(&V);
++   return H.stat;
++}
++
++static uint8_t Named(uint8_t Cmd, const char *Name)
++{
++   memcpy(H.window, Name, strlen(Name));
++   return Command(Cmd, 8, (uint8_t)strlen(Name));
++}
++
++static void Box(uint8_t Cmd, uint8_t Arg)
++{
++   uint8_t Data, St;
++   tdrive_mailbox(&V.vd, Cmd, Arg, &Data, &St);
++}
++
++static void Renumber(void)   // OPEN 15,8,15,"U0>"+CHR$(10)
++{
++   const char U0[] = { 'U', '0', '>', 10 };
++   Box(TD_LISTEN, 8);
++   Box(TD_SECOND, 0x6F);
++   for (size_t i = 0; i < sizeof U0; i++) Box(TD_CIOUT, (uint8_t)U0[i]);
++   Box(TD_UNLSN, 0);
++}
++
++static void Mount(void)
++{
++   memset(Image, 0, sizeof Image);
++   d64_mem_init(&Mem, Image, sizeof Image);
++   if (d64_open_mem(&Disk, &Mem) || d64_format_blank(&Disk, "TEST", "TR")) exit(2);
++   vio_init(&V, &H);
++   tdrive_attach(&V.vd, 0, &Disk, 1);
++   tdrive_set_devices(&V.vd, 0, 0);   // automatic: SD on 8
++   vio_publish_devices(&V);
++}
++
++static int Blocks(const char *Name)
++{
++   d64_entry_t Entry;
++   return d64_find(&Disk, Name, &Entry) == 1 ? Entry.blocks : -1;
++}
++
++// ---- verify: a plain card file, and a host that can read and write C64 RAM by DMA ----
++static uint32_t PlainSize, PlainPos, CardBytes;
++static uint8_t Ram[65536], DmaBuf[2048];
++static int PlainOpen(void *c, int u, const char *n, uint32_t *size) { (void)c; (void)u; (void)n; *size = PlainSize; PlainPos = 0; return 0; }
++static int PlainRead(void *c, int u, uint8_t *buf, uint16_t n)
++{
++   (void)c; (void)u;
++   uint32_t k = PlainSize - PlainPos < n ? PlainSize - PlainPos : n;
++   for (uint32_t i = 0; i < k; i++) buf[i] = PlainPos + i == 0 ? 0x01 : PlainPos + i == 1 ? 0x08 : 0;   // loads at $0801
++   PlainPos += k; CardBytes += k;
++   return (int)k;
++}
++static void PlainClose(void *c, int u) { (void)c; (void)u; }
++static int DmaWrite(void *c, uint16_t a, const uint8_t *b, uint16_t n) { (void)c; memcpy(Ram + a, b, n); return 1; }
++static int DmaRead(void *c, uint16_t a, uint8_t *b, uint16_t n) { (void)c; memcpy(b, Ram + a, n); return 1; }
++
++int main(int argc, char **argv)
++{
++   if (argc >= 3 && !strcmp(argv[1], "verify"))
++   {
++      td_host_t Host;
++      vio_init(&V, &H);
++      memset(&Host, 0, sizeof Host);
++      Host.plain_open = PlainOpen; Host.plain_read = PlainRead; Host.plain_close = PlainClose;
++      tdrive_set_host(&V.vd, &Host);
++      tdrive_attach(&V.vd, 0, NULL, 1);
++      tdrive_set_devices(&V.vd, 0, 0);
++      vio_publish_devices(&V);
++      vio_set_dma(&V, DmaWrite, DmaRead, NULL, DmaBuf, sizeof DmaBuf);
++      Ram[VIO_DMA_SA] = 1;
++      PlainSize = (uint32_t)strtoul(argv[2], NULL, 0);
++      uint8_t Stat = Named(VIO_FVERIFY_OPEN, "BIG");
++      printf("read=%lu stat=%02x\n", (unsigned long)CardBytes, Stat);
++      return 0;
++   }
++   if (argc >= 3 && !strcmp(argv[1], "save"))
++   {
++      Mount();
++      if (Named(VIO_FSAVE_OPEN, "PROG") != VIO_OK || H.data) return 3;
++      memset(H.window, 0x55, 100);
++      Command(VIO_FSAVE_BLK, 0, 100);
++      if (!strcmp(argv[2], "renumber")) Renumber();
++      else Command(VIO_SCAN, 0, 0);
++      uint8_t Stat = Command(VIO_FSAVE_CLOSE, 0, 0);
++      printf("close=%02x data=%u open=%d blocks=%d\n", Stat, H.data, tdrive_chan_mode(&V.vd, 0, 1) != 0, Blocks("PROG"));
++      return 0;
++   }
++   if (argc >= 2 && !strcmp(argv[1], "load"))
++   {
++      Mount();
++      static uint8_t Prog[600];
++      d64_wfile_t Out;
++      if (d64_create(&Disk, "HELLO", 2, 0, &Out) || d64_write(&Disk, &Out, Prog, sizeof Prog) != (int)sizeof Prog ||
++          d64_close_write(&Disk, &Out)) return 2;
++      if (Named(VIO_FLOAD_OPEN, "HELLO") != VIO_OK || H.data) return 3;
++      Renumber();
++      unsigned long Bytes = 0;
++      int End = 0;
++      for (int Block = 0; Block < 100 && !End; Block++)   // 600 bytes are 5 blocks
++      {
++         Command(VIO_FLOAD_BLK, 0, 0);
++         Bytes += H.data;
++         End = (H.st & 0x40) != 0;
++      }
++      printf("bytes=%lu end=%d\n", Bytes, End);
++      return 0;
++   }
++   return 1;
++}
+diff --git a/Source/Teensy/tests/tdrive_mount_harness.cpp b/Source/Teensy/tests/tdrive_mount_harness.cpp
+new file mode 100644
+index 0000000..8b5edb0
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive_mount_harness.cpp
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: MIT
++// tdrive_mount_harness: IOH_TDrive.c's remote image selection (TDrive_RemoteSet, TDrive_RemoteIdleSet) on an in-memory card,
++// driven from stdin one command a line:
++//   file PATH SIZE   a file of SIZE bytes (decimal) on the card
++//   set PATH         TDrive_RemoteSet on the SD unit (TDrive running): prints the result code, the mounted image or "none",
++//                    and on a failure " : " and the reason the remote protocol sends after FailToken
++//   idle PATH        TDrive_RemoteIdleSet on the SD unit (TR menu showing): the same, with the sidecar's text for the image
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <cstdlib>
++#include <map>
++#include <string>
++#include <vector>
++
++#define FLASHMEM
++#define FASTRUN
++#define PROGMEM
++#define Printf_dbg(...) ((void)0)
++#define FILE_READ  0
++#define FILE_WRITE 1
++#define O_RDONLY   0
++#define O_RDWR     2
++
++static struct
++{
++   template <typename... Args> void printf(const char *, Args...) {}
++   void println(const char *) {}
++} Serial;
++static uint32_t Now = 100000;
++static uint32_t millis() { return Now; }
++static struct { uint8_t Bytes[4300]; uint8_t read(int a) { return Bytes[a]; } void write(int a, uint8_t v) { Bytes[a] = v; } } EEPROM;
++static void digitalWriteFast(int, bool) {}
++static int digitalReadFast(int) { return 0; }
++static void DataPortWriteWaitLog(uint8_t) {}
++static uint8_t DataPortWaitRead() { return 0; }
++static void TraceLogAddValidData(uint8_t) {}
++static bool IsDotfile(const char *Name) { return Name[0] == '.'; }
++
++// ---- the card ----
++static std::map<std::string, std::vector<uint8_t>> Card;   // path -> contents; folders are not modeled beyond the root
++
++struct File
++{
++   std::string Path;
++   uint32_t Pos = 0;
++   bool Open = false, Append = false;
++   explicit operator bool() const { return Open; }
++   bool isDirectory() const { return false; }
++   uint32_t size() const { return (uint32_t)Card[Path].size(); }
++   int read(void *Buf, size_t N)
++   {
++      std::vector<uint8_t> &D = Card[Path];
++      size_t K = Pos < D.size() ? std::min(N, D.size() - Pos) : 0;
++      memcpy(Buf, D.data() + Pos, K);
++      Pos += (uint32_t)K;
++      return (int)K;
++   }
++   size_t write(const void *Buf, size_t N)
++   {
++      std::vector<uint8_t> &D = Card[Path];
++      D.insert(D.end(), (const uint8_t *)Buf, (const uint8_t *)Buf + N);
++      return N;
++   }
++   void flush() {}
++   void close() { Open = false; }
++   const char *name() const { return Path.c_str() + Path.rfind('/') + 1; }
++   File openNextFile() { return File(); }
++};
++
++struct FsVolume {};
++struct FsFile
++{
++   std::string Path;
++   uint32_t Pos = 0;
++   bool Open = false;
++   bool open(FsVolume *, const char *P, int)
++   {
++      if (!Card.count(P)) return false;
++      Path = P; Pos = 0; Open = true;
++      return true;
++   }
++   bool isOpen() const { return Open; }
++   bool close() { Open = false; return true; }
++   bool sync() { return true; }
++   bool seekSet(uint32_t P) { Pos = P; return P <= Card[Path].size(); }
++   int read(void *Buf, size_t N)
++   {
++      std::vector<uint8_t> &D = Card[Path];
++      size_t K = Pos < D.size() ? std::min(N, D.size() - Pos) : 0;
++      memcpy(Buf, D.data() + Pos, K);
++      Pos += (uint32_t)K;
++      return (int)K;
++   }
++   size_t write(const void *Buf, size_t N)
++   {
++      std::vector<uint8_t> &D = Card[Path];
++      if (Pos + N > D.size()) D.resize(Pos + N);
++      memcpy(D.data() + Pos, Buf, N);
++      Pos += (uint32_t)N;
++      return N;
++   }
++};
++
++struct FS
++{
++   FsVolume sdfs, mscfs;
++   File open(const char *P, int Mode = FILE_READ)
++   {
++      File F;
++      if (!Card.count(P))
++      {
++         if (Mode != FILE_WRITE) return F;
++         Card[P];
++      }
++      F.Path = P; F.Open = true;
++      return F;
++   }
++   bool exists(const char *P) { return Card.count(P) != 0; }
++   bool remove(const char *P) { return Card.erase(P) != 0; }
++   bool mkdir(const char *) { return false; }
++   bool rmdir(const char *) { return false; }
++};
++static FS SD, firstPartition;
++static bool SDFullInit() { return true; }
++static bool USBFileSystemWait() { return false; }
++
++// ---- what the firmware around the handler provides ----
++#define NumColorRefs 8
++#define rwRegColorRefStart 42
++#define rWRegCurrMenuWAIT 9
++#define eepAdTDriveDevs 4235
++enum { rmtSD = 1, rmtUSBDrive = 0 };
++enum { IOH_TDriveAgent = 200 };
++static volatile uint8_t IO1Bytes[256];
++volatile uint8_t *IO1 = IO1Bytes;
++char DriveDirPath[300] = "/";
++volatile uint8_t BtnPressed;
++
++#include "../MinimalBoot/Common/IO_Handlers/IOH_TDrive.c"
++
++int main()
++{
++   vio = &vioStore;
++   vio_init(vio, &vioHot);
++   tdUnit[0].fs = &SD; tdUnit[0].vol = &SD.sdfs;
++   tdrive_attach(&vio->vd, 0, NULL, 1);
++   vioReady = true;
++
++   char Command[16], Arg[256];
++   while (scanf("%15s %255s", Command, Arg) == 2)
++   {
++      char Msg[64];
++      if (!strcmp(Command, "file"))
++      {
++         unsigned long Size;
++         if (scanf("%lu", &Size) != 1) return 1;
++         Card[Arg] = std::vector<uint8_t>(Size, 0);
++      }
++      else if (!strcmp(Command, "set"))
++      {
++         int R = TDrive_RemoteSet(0, Arg, Msg, sizeof Msg);
++         char Path[TD_PathLen];
++         if (tdUnit[0].mounted) TD_HostPath(&tdUnit[0], tdUnit[0].imgName, Path, sizeof Path);
++         printf("%d %s%s%s\n", R, tdUnit[0].mounted ? Path : "none", R ? " : " : "", R ? Msg : "");
++      }
++      else if (!strcmp(Command, "idle"))
++      {
++         int R = TDrive_RemoteIdleSet(0, Arg, Msg, sizeof Msg);
++         auto It = Card.find(TD_Sidecar);
++         printf("%d %s%s%s\n", R, It == Card.end() ? "none" : std::string(It->second.begin(), It->second.end()).c_str(),
++                R ? " : " : "", R ? Msg : "");
++      }
++      else return 1;
++   }
++   return 0;
++}
+diff --git a/Source/Teensy/tests/tdrive_reu_harness.cpp b/Source/Teensy/tests/tdrive_reu_harness.cpp
+new file mode 100644
+index 0000000..bf19ccc
+--- /dev/null
++++ b/Source/Teensy/tests/tdrive_reu_harness.cpp
+@@ -0,0 +1,108 @@
++// SPDX-License-Identifier: MIT
++// tdrive_reu_harness: the REU registers under "TDrive+REU" (IO2Hndlr_TDriveREU), where the bus snoop is shared with the
++// replacement KERNAL's check, driven from stdin one command a line:
++//   kernal 0       the KERNAL check holds the bus snoop, as a PRG launch under TDrive+REU leaves it
++//   d VALUE        the byte the C64 drives on the next IO2 write
++//   w OFFSET       an IO2 write of that byte
++//   r OFFSET       an IO2 read
++//   ff00 0         the CPU stores to $FF00: prints "transfer" if the REU started one, else "none"
++//   snoop 0        prints who holds the bus snoop: "kernal", "armed" (the $FF00 trigger, KERNAL still served) or "none"
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++
++#define FLASHMEM
++#define FASTRUN
++#define RAM_Bank_Size 0x2000
++#define MaxPathLength 256
++#define SetIRQAssert
++#define SetIRQDeassert
++#define SetDMAAssert
++#define SetDMADeassert
++#define ReadGPIO6 0
++#define GP6_Phi2(Port) ((void)(Port), Phi2Edge())
++#define ARM_DWT_CYCCNT 0u
++#define WaitUntil_nS(nS)
++#define GPIO6_ISR Discard
++#define CORE_PIN1_BITMASK 0
++#define NVIC_CLEAR_PENDING(Irq)
++#define IRQ_GPIO6789 0
++
++struct StructMenuItem;
++enum DMA_Trans_RnW { DMA_READ, DMA_WRITE };
++enum DMA_Addr_Mode { DMA_ADDR_INCREMENT, DMA_ADDR_FIXED };
++struct stcIOHandlers
++{
++   char Name[20];
++   void (*InitHndlr)();
++   void (*IO1Hndlr)(uint8_t Address, bool R_Wn);
++   void (*IO2Hndlr)(uint8_t Address, bool R_Wn);
++   void (*ROMLHndlr)(uint32_t Address);
++   void (*ROMHHndlr)(uint32_t Address);
++   void (*PollingHndlr)();
++   void (*CycleHndlr)();
++};
++static struct { template <typename... Args> void printf(const char *, Args...) {} } Serial;
++
++static uint32_t Discard, StartCycCnt, LastCycCnt;
++static bool Phi2;
++static bool Phi2Edge() { return Phi2 = !Phi2; }
++static uint32_t micros() { return 0; }
++static const int eepAdREUFilename = 0;
++static void EEPreadStr(int, char *Out) { *Out = 0; }
++static bool (*fBusSnoop)(uint16_t Address, bool R_Wn), (*PendingfBusSnoop)(uint16_t Address, bool R_Wn);
++void (*fSpecialBtnChange)(bool Up_nDn);
++bool DMA_RnW, DMA_FixC64Addr;
++uint32_t DMA_Length, DMA_Count, DMA_StartAddr;
++StructMenuItem *DriveDirMenu;
++bool DMAByte(uint8_t *) { return true; }
++static uint8_t AllocRAMBanks(uint8_t **, uint8_t, uint8_t) { return 0; }
++static void FreeRAMBanks(uint8_t **, uint8_t *Count) { *Count = 0; }
++static void LoadRAMBanks(uint8_t **, uint8_t, const char *) {}
++static void SaveRAMBanks(uint8_t **, uint8_t, const char *) {}
++static void InitUSBMouse() {}
++static void InitTRBlock() {}
++static void PollUSBMouse() {}
++static void PollTRBlock() {}
++static void TRPageIO(uint8_t, bool) {}
++#define Fab04_REU
++#include "../MinimalBoot/Common/Menu_Regs.h"
++uint8_t CurrentIOHandler = IOH_REU;
++
++static void DataPortWriteWaitLog(uint8_t) {}
++static uint8_t WriteData;
++static uint8_t DataPortWaitRead() { return WriteData; }
++
++#include "../MinimalBoot/Common/IO_Handlers/IOH_REU.c"
++
++#define VIO_WIN_OFS 0x80
++static void InitHndlr_TDrive() {}
++static void PollingHndlr_TDrive() {}
++static void IO1Hndlr_TDrive(uint8_t, bool) {}
++static void IO2Hndlr_TDrive(uint8_t, bool) {}
++uint32_t RAM2BytesFree() { return 0; }
++#include "../MinimalBoot/Common/IO_Handlers/IOH_TDriveREU.c"
++
++static uint8_t BankRAM[MAX_REU_BANKS][RAM_Bank_Size];
++static bool KernalCheck(uint16_t, bool) { return false; }
++
++int main()
++{
++   char Command[16];
++   unsigned Value;
++
++   NumREU_Banks = 1;
++   REU_Bank[0] = BankRAM[0];
++   while (scanf("%15s %x", Command, &Value) == 2)
++   {
++      if (!strcmp(Command, "kernal")) fBusSnoop = &KernalCheck;
++      else if (!strcmp(Command, "d")) WriteData = Value;
++      else if (!strcmp(Command, "w")) IOHndlr_TDriveREU.IO2Hndlr(Value, false);
++      else if (!strcmp(Command, "r")) IOHndlr_TDriveREU.IO2Hndlr(Value, true);
++      else if (!strcmp(Command, "ff00")) printf("%s\n", fBusSnoop && fBusSnoop(0xff00, false) ? "transfer" : "none");
++      else if (!strcmp(Command, "snoop"))
++         printf("%s\n", fBusSnoop == &KernalCheck ? "kernal" : fBusSnoop == &TDREU_Snoop ? "armed" : fBusSnoop ? "other" : "none");
++      else return 1;
++   }
++   return 0;
++}
+diff --git a/docs/Architecture/C64-Software.md b/docs/Architecture/C64-Software.md
+index 17d8f71..b711852 100644
+--- a/docs/Architecture/C64-Software.md
++++ b/docs/Architecture/C64-Software.md
+@@ -21,6 +21,7 @@ Toolchain: **ACME cross-assembler 0.97** for all `.asm`/`.s` files, except **TRC
+ | `MIDI2SID` | `MIDI2SID` | MIDI-to-SID synth app (IO1 register block reuses raw SID register offsets — `Menu_Regs.i:78-108` flags this as needing to stay in sync or be split out) |
+ | `SimpSwiftTerm` | `SimpSwiftTerm` | Simple SwiftLink terminal program |
+ | `TODCheck` | `TODCheck` | CIA Time-of-Day clock check utility |
++| `TDriveConfig` | `TDriveConfig` | TDrive Config, the TDrive Special IOs' disk-list and mount editor. Its source is teensyrom-tdrive's `util/tdconfig.asm`, copied unchanged by that repository's `tools/make_tr_patch.sh` (change it there); it is at the project root, not in `source/`, and builds `tdconfig.prg` (header `tdconfig.prg.h`, array `tdconfig_prg`) |
+ | `TRCustomBasicCommands` | `TRCustomBasicCommands` | Custom BASIC commands — vendored, see below |
+ | `BASIC` | `BASIC` | Grab-bag of pre-built standalone `.prg` utilities, individually header-converted |
+ | `v1541Wrapper` | `v1541Wrapper` | Virtual 1541 wrapper — **deferred/planned feature**: built and its header kept current, but not yet used by the firmware; waiting on further developer capability before inclusion. Also intended as a general-purpose wrapper for assembly-code PRGs. |
+diff --git a/docs/Architecture/Disk-Images.md b/docs/Architecture/Disk-Images.md
+index 27d9264..4c3733b 100644
+--- a/docs/Architecture/Disk-Images.md
++++ b/docs/Architecture/Disk-Images.md
+@@ -80,8 +80,9 @@ is the policy for when, so that every such caller does it the same way:
+   `File::flush()` does not.
+ * `ImageWriteBackForget` when the image is closed.
+ 
+-The TR block device (`TRBlockIO.c`) uses it with an `FsFile`. VDrive takes it when it moves onto this tree: its
+-units keep their own dirty flag and idle timer today, and flush through `File::flush()`, which drops a failed sync.
++The TR block device (`TRBlockIO.c`) and the TDrive units (`IOH_TDrive.c`, the firmware's name for VDrive) both use it with
++an `FsFile`: each unit keeps a `struct ImageWriteBack`, records its writes, and syncs through `FsFile::sync()` so a sync
++the card fails leaves the image dirty and is tried again.
+ 
+ ## Tests
+ 
+diff --git a/docs/ControlComms.md b/docs/ControlComms.md
+index 20efd46..d914e12 100644
+--- a/docs/ControlComms.md
++++ b/docs/ControlComms.md
+@@ -58,6 +58,8 @@ These commands return `FailToken` (`0x9B7F`) followed by `"Busy!\n"` if the Teen
+   * All SID-related commands (PauseSID, SetSIDSong, SetSIDSpeed*, SetSIDVoiceMute)
+   * Other menu/UI commands (SetColor, Ping, Debug)
+ 
++While a TDrive Special IO runs a C64 program, GetDirectory and GetDirNDJSON are also accepted, so a client can browse for a disk image to mount. The drive must be quiet first: the board waits up to 3 s for the C64's drive to go idle, then answers `FailToken` and the line `C64 is busy with the drive`. `TDriveGetToken` and `TDriveSetToken` are not Busy-gated at all; see [TDrive Get / Set](#tdrive-get--set).
++
+ While the ASID Player is running, Ping and the file operations are also accepted over USB serial. ASID playback can pause while one runs, because the TeensyROM doesn't read incoming ASID data until the command finishes. TCP doesn't answer any command while the ASID Player runs, because the player turns off the Ethernet interrupt.
+ 
+ ---
+@@ -132,6 +134,8 @@ A C64 reset the TeensyROM doesn't see (reset detect disabled in Settings) doesn'
+ |*WriteREUToken     | 0x64FA  | Write REU emulation's memory, off the C64 bus (TR+ Only)|
+ |*SampleWatchToken  | 0x64F9  | Count the C64's writes to one address (TR+ Only)|
+ |*SnoopTapToken     | 0x64F8  | Record bus cycles on chosen pages and send them back (TR+ Only, `DbgSnoopTap` builds only)|
++|TDriveGetToken    | 0x64E3  | Read what a TDrive unit has mounted (see [TDrive Get / Set](#tdrive-get--set)) |
++|TDriveSetToken    | 0x64E4  | Mount a disk image on a TDrive unit, or unmount (see [TDrive Get / Set](#tdrive-get--set)) |
+ |DebugToken        | 0x6467  | Internal debug use only |
+ 
+ *- Always available with full FW (others return "Busy!" if not ready for commands)
+@@ -339,6 +343,35 @@ Lists directory contents on TeensyROM given a `skip`/`take` pair, to facilitate
+  
+ ---
+   
++### TDrive Get / Set
++Reads, or changes, the disk image a TDrive unit has mounted. Each unit is one of the two virtual drives: the SD card's and the USB drive's.
++
++**Workflow:**
++| Direction | Data |
++|---|---|
++| Receive | `TDriveGetToken` — `0x64E3` **or** `TDriveSetToken` — `0x64E4` |
++| Receive | Drive (1): `USBDrive = 0`, `SD = 1` (as the file commands) |
++| Receive | Set only: ImagePath, null-terminated, at most `MaxNamePathLength` bytes including the terminator. `"/dir/IMAGE.D64"` on that unit's own card; an empty string unmounts (the folder stays) |
++| Send | `AckToken 0x64CC` and one line of JSON (the unit's state after the change), or `FailToken 0x9B7F` and one line of text with the reason |
++
++Reasons include `Drive must be USB (0) or SD (1)`, `Path too long!`, `no such drive`, `path must start with /`, `file not found`, `not a disk image` (a folder, a name not ending in `.d64`, `.d71` or `.d81` in any case, or a file under 174848 bytes), `cannot mount (DOS error N)` and `C64 is busy with the drive`. A failed set leaves the current disk mounted. If the Drive byte or the path stops arriving, the board sends the text `Timeout!` and no `FailToken`.
++
++The JSON line has these fields, in this order. While a TDrive handler runs: `unit` (0 = SD, 1 = USB, TDrive's own numbering, the reverse of the Drive byte), `storage` (`"sd"` or `"usb"`), `device` (the unit's current IEC device number), `fixed` (the device number pinned in settings, 0 = automatic), `mounted`, `writable`, `path` (host path of the image, `""` if none), `cwd` (the folder, `"/"` at the root), and on firmware that carries the border-flash debug counters a trailing `dbg` object. With the TR menu showing, or any other Special IO, the line instead has `unit`, `storage`, `running` (`false`), `device`, `fixed` (both the pinned device number, 0 = automatic), `mounted`, `writable` (always `true`), `path` and `cwd`; the `running` field is present only in that form.
++
++**Idle mode.** When no TDrive handler is running, nothing is mounted. Get reports the image the unit will mount at its next start, which is the file `/.tdrive` in the root of that unit's card (if the image it names is gone, `mounted` is `false`); set checks the image and rewrites `/.tdrive`. It does not touch a running C64 program.
++
++**Running mode.** A set waits for a quiet moment on the C64's drive (no LOAD or SAVE in flight, up to 3 s, polling the drive meanwhile), closes the unit's open channels, then mounts as the `CD:` DOS command would. If the C64 keeps the drive busy for the 3 s, the answer is `FailToken` and `C64 is busy with the drive`.
++
++**Availability caveats.** These two commands are not gated by `Busy!`, and they have costs a client should know about:
++  * Under any Special IO that is not a TDrive one, they take the idle path. That path reads `/.tdrive` and opens the named image on the SD card or USB drive (set also rewrites `/.tdrive`), and the main loop waits for it. A USB request with no stick present blocks the main loop for up to about 1.5 s while the board waits for the drive. Do not poll these commands; ask when a user acts.
++  * During a TDrive run, while a remote command is reading its arguments (each wait for an argument byte can last up to `SerialTimoutMillis`, 500 ms) or sending a directory listing, the drive mailbox is not serviced. A C64 disk command issued meanwhile waits, and can hit the KERNAL's mailbox timeout of about 1.6 s. Send arguments promptly and request small directory pages (`Take`).
++
++Firmware that predates these commands answers the tokens with `Unk cmd: 0x64e3` (or `0x64e4`), or `Busy!` from the minimal image, and would read anything sent after them as commands of its own. A sender that waits for the first `AckToken` or `FailToken` stops there. A firmware build without TDrive answers the same way.
++
++**Handler:** `TDriveRemoteCommand(bool Set)`
++
++---
++
+ ### Set Color Reference
+ Sets one of the colors in the TR UI. Color is stored in EEPROM and IO space; the TR menu must be reset for the change to take visual effect.
+  
+diff --git a/tools/c64-projects.json b/tools/c64-projects.json
+index c1b24e8..5cbe523 100644
+--- a/tools/c64-projects.json
++++ b/tools/c64-projects.json
+@@ -122,6 +122,17 @@
+         { "input": "build/Minesweeper.prg", "dest": "Minesweeper.prg.h", "progmem": true }
+       ]
+     },
++    {
++      "name": "TDriveConfig",
++      "description": "TDrive Config, in the TR menu with a TDrive Special IO: edits the Alt-button disk lists and the mounted images. Source: teensyrom-tdrive util/tdconfig.asm, copied unchanged by its make_tr_patch.sh.",
++      "dir": "Source/C64/TDriveConfig",
++      "steps": [
++        { "assembler": "acme", "source": "tdconfig.asm", "output": "tdconfig.prg", "format": "cbm" }
++      ],
++      "headers": [
++        { "input": "build/tdconfig.prg", "dest": "tdconfig.prg.h", "progmem": true }
++      ]
++    },
+     {
+       "name": "C128PrgBoot",
+       "description": "C128 function ROM that streams a $1C01 BASIC program in and runs it in C128 mode; the firmware copies it to RAM to serve it",
+diff --git a/tools/lib/c64-projects.test.mjs b/tools/lib/c64-projects.test.mjs
+index 2a38c1a..895b395 100644
+--- a/tools/lib/c64-projects.test.mjs
++++ b/tools/lib/c64-projects.test.mjs
+@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+ 
+ test('the real manifest loads: every source, header input and directory exists', () => {
+   const projects = loadProjects(root);
+-  assert.equal(projects.length, 16);
++  assert.equal(projects.length, 17);
+ });
+ 
+ test('every directory under Source/C64 is in the manifest', () => {
