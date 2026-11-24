@@ -1470,7 +1470,13 @@ The layout below was taken from VICE's vdrive source (`vdrive-bam.c`, `vdrive-co
 **The engine** (`d64.c`, the shared one, so the change goes to the fork's `tdrive-base` first; 55):
 - `D64_FMT_DNP`; `d64_open_dnp(d, rd, ctx, size)` takes a whole number of tracks (1-255) and opens on the root. Never by size: a 3-track
   `.dnp` is 196608 bytes, a 40-track `.d64`'s length, and from 13 tracks on it would pass for a `.d81`, so the caller picks it by name
-  (the glue's `TD_IsDnp`, tdrive.c's `image_kind` = 1). `d64_mem_t` has a `dnp` flag (`d64_open_mem_dnp`) for the host tests' memory images.
+  (the glue's `TD_IsDnp`, tdrive.c's `image_kind` = 1). The name only chooses; the open then reads 1/1 and 1/2 and refuses the file
+  (`-1`, a mount answers `74`) unless `d64_dnp_check` passes: `'H'` at byte 2 of both and the BAM's track count (byte 8) equal to
+  size / 64 KB. The BAM's `$B7` (the complement at byte 3) is not required: VICE writes it, but no CMD-made image has been seen yet.
+  This runs only when an image is mounted (`CD:`, a path through it, the remembered mount, the Alt button, `trvdrive` set); listings
+  (the card's `$`, TDrive Config's browser, the TR menu) go by the name and never open the file. The glue's `TD_CheckImage`, which
+  remote set and the Alt button call before they close the current disk, reads the same two sectors, so a switch to a renamed
+  `.d64` fails with the old disk still mounted. `d64_mem_t` has a `dnp` flag (`d64_open_mem_dnp`) for the host tests' memory images.
 - `d64_t.hdr_t/hdr_s` is the directory in use. `d64_header`, `d64_dir_first`, and so `d64_find`, the listings and every file open work on
   it; the BAM count and the sector geometry are the partition's. `d64_dir_enter(d, name)` goes into a closed DIR entry of exactly that
   name (no wildcards), `d64_dir_up` follows `$22/$23` (1 moved, 0 already at the root), `d64_dir_root`.
@@ -1502,11 +1508,12 @@ The layout below was taken from VICE's vdrive source (`vdrive-bam.c`, `vdrive-co
 `.d1m/.d2m/.d4m/.dhd`; the files' date stamps (bytes `$19-$1D` of an entry) in listings; `CD//` to the partition's root; the TR menu
 does not browse `.dnp` files (auto-mount from the menu needs that upstream).
 
-**Tested:** `tests/test_dnp.py` (geometry and sizes, the 3-track/40-track ambiguity, header, the free count and the bit order, files,
+**Tested:** `tests/test_dnp.py` (geometry and sizes, the 3-track/40-track ambiguity, the content check (each byte, a renamed 40-track
+`.d64`, an all-zero file), header, the free count and the bit order, files,
 `d64_find` skipping a DIR, sub-directories two levels deep and back, a 600-entry directory, every write refused, the image untouched),
 `tests/test_vio.py` (`test_dnp_*`: CD in and out, the CMD forms, paths from the card and relative ones, the selection kept after a listing
 by path, 39/64/62, `LOAD"*"`, SAVE/`S`/`MD`/`N:` refused, an odd size refused), `tests/test_tdconfig.py` (the browser shows and
 mounts one), `tests/fw_host` (the glue mounts by name, refuses an odd
-size, CD/LOAD/SAVE, a path into a sub-directory, remote set), and TeensyROM's `npm test` (473) with the new engine. The images come from
+size and a renamed `.d64` (listed, not mountable; remote set keeps the current disk), CD/LOAD/SAVE, a path into a sub-directory, remote set), and TeensyROM's `npm test` (473) with the new engine. The images come from
 `tools/dnp.py` (VICE's layout); **no image made by DirMaster, sd2iec or a CMD drive has been read yet**, so the bit order and the header
 offsets rest on VICE's source. Not in VICE (no DNP there), **not on hardware**.

@@ -1265,14 +1265,21 @@ FLASHMEM int TDrive_RemoteQuiet(char *msg, size_t cap)
    return 0;
 }
 
-// 0 = a readable file of at least D64 size (a .dnp: a multiple of 64 KB, up to 255 tracks); else 62 (not found) / 74 (not a disk
-// image), reason in msg.
+// 0 = a readable file of at least D64 size; else 62 (not found) / 74 (not a disk image), reason in msg. A .dnp is also read: its
+// root header and BAM (1/1, 1/2) must pass d64_dnp_check, as the mount will, so a switch to a bad one leaves the current disk mounted.
+// Only callers that are about to switch use this (remote set, the Alt button); listings never open a file.
 FLASHMEM static int TD_CheckImage(FS *fs, const char *path, char *msg, size_t cap)
 {
    File probe = fs->open(path, FILE_READ);
    if (!probe) { snprintf(msg, cap, "file not found"); return 62; }
    bool bad = probe.isDirectory();
-   if (!bad) { uint32_t size = probe.size(); bad = TD_IsDnp(path) ? size == 0 || size % 65536 || size > 255u * 65536 : size < 174848; }
+   if (!bad && TD_IsDnp(path))
+   {
+      uint8_t hdr[D64_SECTOR], bam[D64_SECTOR];
+      bad = !probe.seek(256) || probe.read(hdr, sizeof hdr) != (int)sizeof hdr || probe.read(bam, sizeof bam) != (int)sizeof bam
+            || d64_dnp_check(hdr, bam, probe.size());
+   }
+   else if (!bad) bad = probe.size() < 174848;
    probe.close();
    if (bad) { snprintf(msg, cap, "not a disk image"); return 74; }
    return 0;

@@ -734,6 +734,11 @@ class HostTests(unittest.TestCase):
         self.assertFalse((self.tmp / "new.dnp").exists())
         (self.tmp / "odd.dnp").write_bytes(bytes(65536 + 256))
         self.cmd15(b"CD:ODD.DNP"); self.assertEqual(self.status(), "74,DRIVE NOT READY,00,00\r")
+        (self.tmp / "forty.dnp").write_bytes((self.tmp / "a.d64").read_bytes() + bytes(5 * 17 * 256))   # a 40-track .d64, renamed
+        rc, _, lst = self.io.fast_load(8, b"$")
+        self.assertIn(b'"FORTY.DNP"', lst)                                                 # listed by its name alone
+        self.cmd15(b"CD:FORTY.DNP"); self.assertEqual(self.status(), "74,DRIVE NOT READY,00,00\r")   # refused by its content
+        self.assertIsNone(self.cur)
         self.cmd15(b"CD:CMD.DNP"); self.status()
         self.cmd15(b"CD:NOPE"); self.assertEqual(self.status(), "39,FILE NOT FOUND,00,00\r")
         self.cmd15(b"CD:NOPE/DEEP"); self.assertEqual(self.status(), "39,FILE NOT FOUND,00,00\r")

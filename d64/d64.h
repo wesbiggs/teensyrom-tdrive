@@ -128,10 +128,14 @@ int  d64_open(d64_t *d, d64_read_fn rd, void *ctx, uint8_t tracks);   /* tracks:
 int  d64_open_size(d64_t *d, d64_read_fn rd, void *ctx, size_t file_size);   /* format from the file size (error bytes allowed); -1 if too small */
 int  d64_open_exact(d64_t *d, d64_read_fn rd, void *ctx, size_t file_size);  /* as d64_open_size, but -1 unless the size is exactly
                                                                                  one kind's, with or without error bytes */
-/* .dnp, a CMD native partition: 256 sectors per track, file_size / 64 KB tracks (a multiple of 64 KB, at most 255 tracks, else -1).
- * Never chosen by size (a 3-track dnp is as long as a 40-track d64): the caller knows it from the name. Read-only for now: every
- * write answers D64_E_RO. Opens on the root directory. */
+/* .dnp, a CMD native partition: 256 sectors per track, file_size / 64 KB tracks (a multiple of 64 KB, at most 255 tracks).
+ * Never chosen by size (a 3-track dnp is as long as a 40-track d64): the caller knows it from the name, and the open checks the
+ * content: it reads 1/1 and 1/2 and returns -1 unless d64_dnp_check passes (or the size is wrong). Read-only for now: every write
+ * answers D64_E_RO. Opens on the root directory.
+ * d64_dnp_check: 0 when the size is whole tracks, the root header (1/1) and the BAM (1/2) both have 'H' at byte 2, and the BAM's
+ * track count (byte 8) matches the size; else -1. For a caller that reads those two sectors itself before switching to an image. */
 int  d64_open_dnp(d64_t *d, d64_read_fn rd, void *ctx, size_t file_size);
+int  d64_dnp_check(const uint8_t *hdr, const uint8_t *bam, size_t file_size);
 /* Error table: d64_errtab_offset = where it starts in a file of this size (-1: the file has none; after d64_open_size), d64_sectors =
  * the image's sector count (= the table's length). d64_open_mem sets errtab itself. d64_errcode: an error byte -> DOS code, 0 = no
  * read error (1 = OK; 2..6, 9, 11, 15 = 20..24, 27, 29, 74; the write errors 25 / 26 / 28 and unknown bytes read fine). */

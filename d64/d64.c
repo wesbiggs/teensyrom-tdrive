@@ -86,12 +86,20 @@ VD_COLD int d64_open(d64_t *d, d64_read_fn rd, void *ctx, uint8_t tracks)
     geometry(d, tracks);
     return 0;
 }
-VD_COLD int d64_open_dnp(d64_t *d, d64_read_fn rd, void *ctx, size_t size)
+VD_COLD int d64_dnp_check(const uint8_t *hdr, const uint8_t *bam, size_t size)
 {
     if (size == 0 || size % 65536 || size / 65536 > 255) return -1;
+    if (hdr[2] != 0x48 || bam[2] != 0x48 || bam[8] != size / 65536) return -1;   /* 'H' twice, the BAM's track count = the length */
+    return 0;
+}
+VD_COLD int d64_open_dnp(d64_t *d, d64_read_fn rd, void *ctx, size_t size)
+{
+    uint8_t hdr[D64_SECTOR], bam[D64_SECTOR];
+    if (size == 0 || size % 65536 || size / 65536 > 255 || !rd) return -1;
     d64_open(d, rd, ctx, 35);
     d->fmt = D64_FMT_DNP; d->tracks = (uint8_t)(size / 65536);
     d->hdr_t = 1; d->hdr_s = 1;                                    /* the root directory */
+    if (rd(ctx, 1, 1, hdr) || rd(ctx, 1, 2, bam) || d64_dnp_check(hdr, bam, size)) return -1;   /* is it one? (only here, on a mount) */
     return 0;
 }
 VD_COLD int d64_open_size(d64_t *d, d64_read_fn rd, void *ctx, size_t size)
@@ -128,8 +136,8 @@ VD_COLD int d64_errcode(uint8_t e)
 }
 VD_COLD int d64_open_mem_dnp(d64_t *d, d64_mem_t *m)
 {
-    if (d64_open_dnp(d, mem_read, m, m->len)) return -1;
-    m->dnp = 1;
+    m->dnp = 1;                                                    /* mem_read takes the geometry from it */
+    if (d64_open_dnp(d, mem_read, m, m->len)) { m->dnp = 0; return -1; }
     d->write = mem_write;
     return 0;
 }

@@ -216,10 +216,11 @@ Firmware integration and usage: `firmware/README.md`.
   0.9.0.69 A/B build. Why 0.9.0.64-0.9.0.67 crashed is not known (a non-"None" Alt setting would fit; not confirmed).
 * 0.9.0.76: **`.dnp` images (CMD native partitions), read-only** (docs/DESIGN.md 66): the shared engine reads the native layout (256 sectors per track,
   1-255 tracks, bitmap-only BAM in 1/2-1/33, MSB-first bits) and walks sub-directories (`d64_dir_enter`/`up`/`root`, `d64_t.hdr_t/hdr_s` = the directory in use);
-  every write is `D64_E_RO` (`not_writable()`). Opened by name only (`d64_open_dnp`, the glue's `TD_IsDnp`; a 3-track one is a 40-track d64's size). In `tdrive.c`,
+  every write is `D64_E_RO` (`not_writable()`). Chosen by name (`d64_open_dnp`, the glue's `TD_IsDnp`; a 3-track one is a 40-track d64's size), then checked on every
+  mount by content (`d64_dnp_check`: `'H'` in 1/1 and 1/2, BAM track count = length; also `TD_CheckImage` before a remote/Alt switch); listings never open the file. In `tdrive.c`,
   `path_walk` stays inside a DNP (DIR entries entered, `..`/`_` up, out from its root; a missing directory is `39`), every `/` is a path there, a DIR opened as a file is `64`,
   `N:X.DNP` is `31`; TDrive Config's browser lists and mounts them. Layout from VICE's vdrive source (VICE has no bare `.dnp`; `c1541` cannot make or read one), test images from
-  `tools/dnp.py`. **The engine change is commit `4f805afc` on the fork's `tdrive-base` (on `9df749d5`), named in `firmware/UPSTREAM`: push it before `build_firmware.sh`/CI.**
+  `tools/dnp.py`. **The engine change is commit `bfc1379c` on the fork's `tdrive-base` (on `9df749d5`), named in `firmware/UPSTREAM`: push it before `build_firmware.sh`/CI.**
   Unit tests (`tests/test_dnp.py`), drive (`test_vio.py` `test_dnp_*`), glue (`tests/fw_host`), TDrive Config (py65), TeensyROM `npm test` (473), all three firmware builds
   (TR+ main image RAM1 free for locals 56636, padding 24680); **not on hardware, and no DirMaster / sd2iec / CMD-made image read yet** (the bit order and header offsets rest on VICE's source).
 * **0.9.0.69 (host test, not on hardware):** a remote swap or an Alt-button switch closes the unit's channels on the old image before it mounts the new one

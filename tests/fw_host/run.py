@@ -73,6 +73,8 @@ try:
     from dnp import sample
     (sd / "CMD.DNP").write_bytes(sample().bytes())
     (sd / "ODD.DNP").write_bytes(bytes(65536 + 256))                   # not a whole number of tracks
+    mk(sd / "WRONG.DNP", "fortytrk", "ft", {}, "d64")                  # a 40-track .d64 under a .dnp name: a 3-track .dnp's length,
+    (sd / "WRONG.DNP").write_bytes((sd / "WRONG.DNP").read_bytes() + bytes(5 * 17 * 256))   # so only the content tells them apart
     # error tables (683 bytes after a 35-track image): BAD.D64 marks 17/0, the first sector of BADF, as 23 (byte 5); OKTAB.D64 all OK
     mk(sd / "BAD.D64", "baddisk", "bd", {"BADF": b"\x01\x08" + b"B" * 600, "GOODF": b"\x01\x08good"})
     tab = bytearray([1] * 683); tab[16 * 21] = 5

@@ -774,6 +774,8 @@ int main(int argc, char **argv)
     check("a path into a DNP sub-directory", fast_load(8, "/CMD.DNP/GAMES/DEEP/BOTTOM", &rc).size() == 1026 && rc == 0);
     cmd15("CD:/"); status15();
     cmd15("CD:ODD.DNP"); check("a .dnp that is not whole tracks is refused", status15().rfind("74,", 0) == 0 && !tdUnit[0].mounted);
+    check("a 40-track .d64 named .DNP is listed (browsing reads no file)", fast_load(8, "$").find("WRONG.DNP") != std::string::npos);
+    cmd15("CD:WRONG.DNP"); check("... but refused when mounted: its header is no native partition's", status15().rfind("74,", 0) == 0 && !tdUnit[0].mounted);
     cmd15("CD:/"); status15();
     cmd15("UI"); check("UI answers 73", status15().rfind("73,", 0) == 0);
     cmd15("CD:/"); status15();
@@ -930,6 +932,8 @@ int main(int argc, char **argv)
         check("remote set: a DNP too", TDrive_RemoteSet(0, "/CMD.DNP", msg, sizeof msg) == 0 && tdUnit[0].d.fmt == D64_FMT_DNP);
         check("remote set: a DNP of no whole tracks is refused", TDrive_RemoteSet(0, "/ODD.DNP", msg, sizeof msg) == 74 && tdUnit[0].d.fmt == D64_FMT_DNP);
         TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg);                    // as the following checks expect
+        check("remote set: a .d64 named .DNP is refused before the switch, the current disk stays",
+              TDrive_RemoteSet(0, "/WRONG.DNP", msg, sizeof msg) == 74 && tdUnit[0].mounted && tdUnit[0].d.fmt == D64_FMT_D81);
 
         check("remote set: USB unit", TDrive_RemoteSet(1, "/USB.D64", msg, sizeof msg) == 0 && has(1, "\"path\":\"/USB.D64\"") && has(0, "/BIG.D81"));
 

@@ -13,11 +13,12 @@ E_RO, E_NOTFOUND = -6, -8
 
 class GeometryTests(unittest.TestCase):
     def test_sizes(self):
-        d = ctypes.create_string_buffer(LIB.d64_sizeof_d64())
         for size, ok in ((0, False), (65535, False), (65536, True), (65536 * 3, True), (65536 * 3 + 256, False),
                          (65536 * 255, True), (65536 * 256, False)):
-            self.assertEqual(LIB.d64_open_dnp(d, None, None, ctypes.c_size_t(size)) == 0, ok, size)
-        self.assertEqual(LIB.d64_open_dnp(d, None, None, ctypes.c_size_t(65536 * 7)), 0)
+            hdr, bam = bytes(2) + b"H" + bytes(253), bytes(2) + b"H" + bytes(5) + bytes([size // 65536 & 255]) + bytes(247)
+            self.assertEqual(LIB.d64_dnp_check(hdr, bam, ctypes.c_size_t(size)) == 0, ok, size)
+        disk = Disk(Dnp(7).bytes(), dnp=True)
+        d = disk.d
         LIB.d64_sector_offset.restype = ctypes.c_long
         self.assertEqual(LIB.d64_sectors(d), 7 * 256)
         self.assertEqual(LIB.d64_sectors_in_track(d, 7), 256)
@@ -26,6 +27,31 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(LIB.d64_sector_offset(d, 2, 5), (256 + 5) * 256)
         self.assertEqual(LIB.d64_sector_offset(d, 7, 255), (7 * 256 - 1) * 256)
         self.assertEqual(LIB.d64_sector_offset(d, 8, 0), -1)
+
+    def opens(self, img):
+        d = ctypes.create_string_buffer(LIB.d64_sizeof_d64())
+        m = ctypes.create_string_buffer(LIB.d64_sizeof_mem())
+        buf = ctypes.create_string_buffer(bytes(img), len(img))
+        LIB.d64_mem_init(m, buf, ctypes.c_size_t(len(img)))
+        return LIB.d64_open_mem_dnp(d, m) == 0
+
+    def test_content_check_on_open(self):
+        """the open reads the root header and the BAM: 'H' in both, the BAM's track count = the length"""
+        good = Dnp(3).bytes()
+        self.assertTrue(self.opens(good))
+        for what, off, val in (("header format byte", 256 + 2, 0x41), ("BAM format byte", 512 + 2, 0x00),
+                               ("BAM track count", 512 + 8, 4)):
+            bad = bytearray(good); bad[off] = val
+            self.assertFalse(self.opens(bytes(bad)), what)
+        bad = bytearray(good); bad[512 + 3] = 0                                      # the complement ($B7) is not required
+        self.assertTrue(self.opens(bytes(bad)))
+        self.assertFalse(self.opens(bytes(196608)), "an all-zero file of whole tracks")
+
+    def test_a_d64_named_dnp_is_refused(self):
+        """a 40-track .d64 has exactly a 3-track .dnp's length: the content tells them apart"""
+        d64 = bytearray(196608)
+        d64[357 * 256: 357 * 256 + 2] = b"\x12\x01"; d64[357 * 256 + 2] = 0x41           # 18/0 as a 1541 formats it
+        self.assertFalse(self.opens(bytes(d64)))
 
     def test_never_by_size(self):
         """a 3-track dnp is as long as a 40-track d64: the size picks the d64, only the name the dnp"""
