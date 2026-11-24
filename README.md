@@ -133,7 +133,7 @@ The examples here use `8` as an illustration only, and work the same on both SD 
 | `SAVE"NAME",8` | Save a BASIC file |
 | `SAVE"@0:NAME",8` | Save a BASIC file, replacing an existing one |
 | `VERIFY"NAME",8` | Verify a BASIC file |
-| `OPEN15,8,15,"CD:GAME.D64"` | Mount a disk image (`.d64`/`.d71`,`.d81` supported) |
+| `OPEN15,8,15,"CD:GAME.D64"` | Mount a disk image (`.d64`/`.d71`,`.d81` supported; `.dnp` read-only) |
 | `OPEN15,8,15,"CD:SUBDIR"` | Move into a folder |
 | `OPEN15,8,15,"CD:.."` | Move up one level |
 | `OPEN15,8,15,"CD:←"` | Unmount the image (← is the left-arrow key, top left; `$5F`, shown as `_` on a PC) |
@@ -206,7 +206,8 @@ The accepted range is 8-30 (a number outside that range, or the other unit's num
 unit by the scan; every other device number keeps using the real IEC code. However, if you set one of the TDrives to the same number as a real device, the real device will be hidden and inaccessible.
 
 ### Images and mount points
-Image formats: `.d64` (35/40 tracks), `.d71` (1571, 70 tracks) and `.d81` (1581; root directory only, no sub-directories) are recognised by file size and extension; files may carry the trailing error-info bytes (one per sector, as copiers and VICE write them), and a read of a sector they mark bad fails as on a real drive: `20`-`24`, `27`, `29` or `74` with the sector's track and sector on the error channel (`docs/DESIGN.md` section 35).
+Image formats: `.d64` (35/40 tracks), `.d71` (1571, 70 tracks) and `.d81` (1581; root directory only, no sub-directories) are recognised by file size and extension;
+`.dnp` (a CMD native partition, as CMD HD / RAMLink / FD drives and sd2iec use them; up to 16 MB) by its extension, **read-only for now** (a write answers `26,WRITE PROTECT ON`): `CD:SUBDIR`, `CD/SUBDIR`, `CD:..`, `CD:←` and paths like `LOAD"GAMES/DEEP/FILE"` or `LOAD"/GAMES/:FILE"` walk its sub-directories, `CD:..` / `CD:←` from its root leaves the image, a leading `/` is still the card's root, and a sub-directory that is not there is `39` (`docs/DESIGN.md` section 66); files may carry the trailing error-info bytes (one per sector, as copiers and VICE write them), and a read of a sector they mark bad fails as on a real drive: `20`-`24`, `27`, `29` or `74` with the sector's track and sector on the error channel (`docs/DESIGN.md` section 35).
 Opening a `.dXX` in the TeensyROM menu and launching a program from it mounts that image automatically on device 8 (SD) or 9 (USB), so the program's own LOADs find its files; `CD:←` unmounts it. The last mounted image of each drive is also remembered in a hidden `/.tdrive` file on that card and mounted again at the next start (any unmount forgets it).
 The USB drive works the same. Any other device number uses the real IEC bus untouched.
 
@@ -268,7 +269,7 @@ hooks the KERNAL's RAM vectors (`$0314-$0333`) instead of patching the serial ro
 
 | Feature | TR+ (patched KERNAL) | TR (RAM vectors) |
 |---|---|---|
-| Image formats (`.d64`, `.d71`, `.d81`), `CD` and paths (CMD syntax included) | Yes | Yes |
+| Image formats (`.d64`, `.d71`, `.d81`; `.dnp` read-only), `CD` and paths (CMD syntax included) | Yes | Yes |
 | `N:`, `S:`, `R:`, `C:`, `V`, `L:`, `MD:` / `RD:` | Yes | Yes |
 | REL files, append, `#` channels with `U1` / `U2` / `B-P` | Yes | Yes |
 | Plain card files, long-name aliases | Yes | Yes |

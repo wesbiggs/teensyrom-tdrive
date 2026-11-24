@@ -13,12 +13,12 @@ LIB.d64_build_dir.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p,
 
 class Disk:
     """ctypes wrapper over libd64 (memory image)."""
-    def __init__(self, image: bytes):
+    def __init__(self, image: bytes, dnp=False):
         self.image = ctypes.create_string_buffer(image, len(image))
         self.mem = ctypes.create_string_buffer(LIB.d64_sizeof_mem())
         self.d = ctypes.create_string_buffer(LIB.d64_sizeof_d64())
         LIB.d64_mem_init(self.mem, self.image, ctypes.c_size_t(len(image)))
-        assert LIB.d64_open_mem(self.d, self.mem) == 0
+        assert (LIB.d64_open_mem_dnp if dnp else LIB.d64_open_mem)(self.d, self.mem) == 0
 
     def header(self):
         n, i, o = (ctypes.create_string_buffer(17), ctypes.create_string_buffer(3), ctypes.create_string_buffer(3))

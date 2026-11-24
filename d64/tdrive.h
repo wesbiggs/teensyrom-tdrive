@@ -100,6 +100,7 @@ typedef struct {
     struct tdrive_s *owner;     /* back pointer: closing a channel may have to restore the host state */
     uint8_t  index;             /* this unit's number (0/1) */
     uint8_t  restore_ch;        /* channel + 1 whose close restores the folder / image selected before a path listing; 0 = none */
+    uint8_t  rs_t, rs_s;        /* with it: the .DNP directory in use then (d64_t.hdr_t/hdr_s; 0 = not a .DNP) */
     d64_t   *disk;              /* NULL: no image mounted */
     uint8_t  present;           /* device answers on the bus */
     uint8_t  slot_of[16];       /* channel number -> pool slot + 1 (0 = not open) */

@@ -1447,3 +1447,66 @@ which plays the real 1541 there): a real drive at 8 (the SD unit becomes 9, `TDR
 the drive at 8), an empty bus (SD stays 8), and no handler (`layout=None`: no unit shown, no IO write). The 0.9.0.73 PRG fails all three.
 **Not on hardware**, and not in VICE under the agent (`make test-agent` does not run TDCOPY).
 
+
+## 66. CMD native partitions (`.dnp`), read-only (0.9.0.76; host tests; not in VICE or on hardware)
+
+A `.dnp` is one CMD native partition saved as a file: the format of the CMD HD, RAMLink and FD drives' native partitions, which sd2iec
+mounts and DirMaster edits. VICE handles native partitions only inside its whole-drive images (`.d1m/.d2m/.d4m`, `.dhd`, with the CMD
+ROMs), not as a bare `.dnp`, and `c1541` can neither make nor read one, so it cannot be the second opinion here that it is for D64/D71/D81.
+The layout below was taken from VICE's vdrive source (`vdrive-bam.c`, `vdrive-command.c`, `vdrive-dir.c`, `diskconstants.h`, 3.7.1).
+
+**The layout.** 256 sectors on each of 1 to 255 tracks, so the file is `tracks * 64 KB` and sector t/s is at `((t - 1) * 256 + s) * 256`.
+- 1/1, the root header: `$00/$01` the first directory sector (1/34), `$02` `'H'`, the name at `$04` (16 bytes, `$A0` padded over 25), the ID
+  at `$16/$17`, DOS `"1H"` at `$19` (the D81 offsets), `$20/$21` this header, `$22/$23` the parent's header (0/0 for the root),
+  `$24/$25/$26` the parent directory sector and the offset of this directory's entry in it.
+- 1/2-1/33, the BAM: taken as one 8 KB block, track t's 32 bytes start at byte `32 * t`, so the first 32 bytes are the BAM's own header
+  (`$02` `'H'`, `$03` its complement, the ID, `$06` `$C0`, `$08` the number of tracks). A set bit is a free sector, sector s is bit
+  `7 - s % 8` of byte `s / 8` (the reverse of the CBM order), and there are no per-track counts. CMD marks the tracks past the last one
+  all free, so only tracks 1..last are counted, and 1/0-1/63 are never counted (VICE's free count skips them): a blank partition has
+  `tracks * 256 - 64` blocks free (192 on one track, 65216 on 255: still a 16-bit number).
+- Directories are chains of the usual 8-entry sectors, anywhere on the partition. An entry of type 6 (`DIR`, `$86` when closed) is a
+  sub-directory: its t/s is the sub-directory's header, laid out as the root's, whose `$00/$01` is its first directory sector.
+
+**The engine** (`d64.c`, the shared one, so the change goes to the fork's `tdrive-base` first; 55):
+- `D64_FMT_DNP`; `d64_open_dnp(d, rd, ctx, size)` takes a whole number of tracks (1-255) and opens on the root. Never by size: a 3-track
+  `.dnp` is 196608 bytes, a 40-track `.d64`'s length, and from 13 tracks on it would pass for a `.d81`, so the caller picks it by name
+  (the glue's `TD_IsDnp`, tdrive.c's `image_kind` = 1). `d64_mem_t` has a `dnp` flag (`d64_open_mem_dnp`) for the host tests' memory images.
+- `d64_t.hdr_t/hdr_s` is the directory in use. `d64_header`, `d64_dir_first`, and so `d64_find`, the listings and every file open work on
+  it; the BAM count and the sector geometry are the partition's. `d64_dir_enter(d, name)` goes into a closed DIR entry of exactly that
+  name (no wildcards), `d64_dir_up` follows `$22/$23` (1 moved, 0 already at the root), `d64_dir_root`.
+- `d64_find` never returns a DIR entry (`LOAD"*"` loads the first file, not a directory). For every format, listings name types 5 and 6
+  `CBM` and `DIR` (1581 partitions and CMD directories) instead of `???`.
+- REL files take the super side sector, as on a D81 (`big_rel`). A directory chain may be up to 254 sectors before it counts as a loop
+  (64 on the other formats), a file chain as long as the partition.
+- **Read-only:** `not_writable()` is true for a DNP whatever the backend allows, so every write (SAVE, `S`, `R`, `C`, `N`, `V`, `L`,
+  `B-A`/`B-F`, `U2`, REL writes) answers `D64_E_RO`, i.e. `26, WRITE PROTECT ON`. The write side needs its own allocator (upwards from
+  1/64, no counts), directory growth anywhere, the block count of a sub-directory's entry kept up to date, `MD`/`RD` in the image, a
+  formatter for `N:` and a validator that walks sub-directories.
+
+**The drive** (`tdrive.c`):
+- `.DNP` mounts like the other images (`CD:X.DNP`, paths, `$==`, the Alt-button list, `trvdrive` set, the `/.tdrive` sidecar), shows as
+  `DNP` in card listings, and `S:X.DNP` with nothing mounted deletes one. `N:X.DNP` answers `31` (no formatter yet). The glue refuses a
+  `.dnp` that is not a whole number of tracks (`74`).
+- Inside a DNP, `path_walk` stays in the image: a component naming a DIR entry enters it, `..` / `_` goes to the parent and from the
+  image's root out of the image (as from a `.D64`), a last component that is no DIR entry is the file name (or the pattern), and one
+  before the last is `39` (`FILE NOT FOUND`, the CMD FD text, as VICE has it). So `CD:GAMES`, `CD/GAMES` (CMD), `CD:..`, `CD:_`,
+  `LOAD"GAMES/DEEP/F"`, `LOAD"/GAMES/:F"` (CMD), `LOAD"$GAMES/"`, `LOAD"$GAMES/A*"` and from the card `LOAD"/X.DNP/GAMES/F"` all work.
+  Every `/` is a path in a DNP (on a D64 only a name that walks somewhere is, since `/` is a legal file-name character there).
+- TDrive Config's browser (23) lists `.DNP` files with the others (`DNP` in its type table) and mounts them (`B`), or puts them in the list.
+- A leading `/` (and so CMD's `//`) is still the card's root, not the partition's: the image is a folder of the card here.
+- `LOAD"GAMES"` on a DIR entry answers `64, FILE TYPE MISMATCH`; `CD:NOPE` answers `39`.
+- A listing by path keeps the selection (18): the host's pop re-mounts the image at its root, so the unit keeps the DNP directory that
+  was in use (`td_unit_t.rs_t/rs_s`) and puts it back.
+
+**Not done:** writing (above); CMD partitions (`CP`, `G-P`, `$=P`; one `.dnp` is one partition) and the whole-drive images
+`.d1m/.d2m/.d4m/.dhd`; the files' date stamps (bytes `$19-$1D` of an entry) in listings; `CD//` to the partition's root; the TR menu
+does not browse `.dnp` files (auto-mount from the menu needs that upstream).
+
+**Tested:** `tests/test_dnp.py` (geometry and sizes, the 3-track/40-track ambiguity, header, the free count and the bit order, files,
+`d64_find` skipping a DIR, sub-directories two levels deep and back, a 600-entry directory, every write refused, the image untouched),
+`tests/test_vio.py` (`test_dnp_*`: CD in and out, the CMD forms, paths from the card and relative ones, the selection kept after a listing
+by path, 39/64/62, `LOAD"*"`, SAVE/`S`/`MD`/`N:` refused, an odd size refused), `tests/test_tdconfig.py` (the browser shows and
+mounts one), `tests/fw_host` (the glue mounts by name, refuses an odd
+size, CD/LOAD/SAVE, a path into a sub-directory, remote set), and TeensyROM's `npm test` (473) with the new engine. The images come from
+`tools/dnp.py` (VICE's layout); **no image made by DirMaster, sd2iec or a CMD drive has been read yet**, so the bit order and the header
+offsets rest on VICE's source. Not in VICE (no DNP there), **not on hardware**.

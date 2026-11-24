@@ -69,6 +69,10 @@ try:
     mk(usb / "USB.D64", "usbdisk", "us", {})
     mk(sd / "BIG.D81", "bigdisk", "bd", {"H81": b"\x01\x08d81!"}, "d81")
     mk(sd / "TWO.D71", "twodisk", "td", {"H71": b"\x01\x08d71!"}, "d71")
+    sys.path.insert(0, str(ROOT / "tools"))                              # a CMD native partition (docs/DESIGN.md 66): c1541 makes none
+    from dnp import sample
+    (sd / "CMD.DNP").write_bytes(sample().bytes())
+    (sd / "ODD.DNP").write_bytes(bytes(65536 + 256))                   # not a whole number of tracks
     # error tables (683 bytes after a 35-track image): BAD.D64 marks 17/0, the first sector of BADF, as 23 (byte 5); OKTAB.D64 all OK
     mk(sd / "BAD.D64", "baddisk", "bd", {"BADF": b"\x01\x08" + b"B" * 600, "GOODF": b"\x01\x08good"})
     tab = bytearray([1] * 683); tab[16 * 21] = 5

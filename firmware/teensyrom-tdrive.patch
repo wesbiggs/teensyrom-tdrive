@@ -200,7 +200,7 @@ index 5c20eda..d1928c4 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 91aca90..ab97b30 100644
+index 91aca90..f9de28e 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -222,7 +222,7 @@ index 91aca90..ab97b30 100644
  
  
 -#define TRVersion              "0.9.0.1"    //*VERSION*
-+#define TRVersion              "0.9.0.1.75"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 75)
++#define TRVersion              "0.9.0.1.76"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 76)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
@@ -365,10 +365,10 @@ index 5ba190e..4f0a9b6 100644
              TxMsgOffset = 0;
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
 new file mode 100644
-index 0000000..4b1c12c
+index 0000000..5409c5e
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
-@@ -0,0 +1,1894 @@
+@@ -0,0 +1,1905 @@
 +// The TDrive Special IOs: the virtual IEC drive and its SD / USB glue. On the TeensyROM+ (Fab04_TDrive) "TDrive KERNAL" and its
 +// combined handlers serve a replacement KERNAL; on both boards (TDrive_Agent) IOH_TDriveAgent.c reaches the same drive through the
 +// KERNAL's RAM vectors and a 6502 agent (docs/DESIGN.md 53). The KERNAL-only parts are under Fab04_TDrive.
@@ -376,7 +376,7 @@ index 0000000..4b1c12c
 +//   unit 0 = SD card, unit 1 = USB drive. Device numbers are automatic by default: the first free numbers from 8 up
 +//   (the KERNAL probes the real serial bus on the first disk access of a run, see tdrive_io.h), so 8 (SD) and 9 (USB) when
 +//   no other drive is attached. A number can be fixed from BASIC with  OPEN15,8,15,"U0>"+CHR$(10):CLOSE15  (this drive becomes
-+//   device 10, kept in EEPROM; CHR$(0) makes it automatic again). Each unit serves a mounted .d64 / .d71 / .d81 (or lists the host
++//   device 10, kept in EEPROM; CHR$(0) makes it automatic again). Each unit serves a mounted .d64 / .d71 / .d81 / .dnp (or lists the host
 +//   directory so one can be picked with  OPEN15,8,15,"CD:GAME.D64"  /  "CD:_" to unmount, or  LOAD"$/GAMES/GAME.D64",8).
 +// Uses the KERNAL bus hook from IOH_KernalReplace.c with its own image (TD_KernalImage below: /TDrive/kernal.bin on the SD card, else
 +// the C64's own KERNAL patched in memory; the <Shift-K> file stays the plain Kernal Replace's) and adds the IO1/IO2 mailbox the
@@ -684,6 +684,13 @@ index 0000000..4b1c12c
 +   TD_SidecarClear(u);                                   // an explicit unmount forgets the image (a new mount re-writes it)
 +}
 +
++// A .dnp (CMD native partition) is known by its name, never by its size: a 3-track one is as long as a 40-track .d64.
++FLASHMEM static bool TD_IsDnp(const char *path)
++{
++   size_t n = strlen(path);
++   return n >= 4 && path[n - 4] == '.' && (path[n - 3] | 0x20) == 'd' && (path[n - 2] | 0x20) == 'n' && (path[n - 1] | 0x20) == 'p';
++}
++
 +// Mount the image at path (host spelling); imgName keeps its host name.
 +FLASHMEM static int TD_MountHost(int unit, const char *path, d64_t **out)
 +{
@@ -698,11 +705,13 @@ index 0000000..4b1c12c
 +   if (!probe || probe.isDirectory()) { if (probe) probe.close(); return 62; }   // FILE NOT FOUND
 +   uint32_t size = probe.size();
 +   probe.close();
-+   if (size < 174848) return 74;                                                  // DRIVE NOT READY: not a D64
++   const bool dnp = TD_IsDnp(leaf);
++   if (dnp ? (size == 0 || size % 65536 || size > 255u * 65536) : size < 174848) return 74;   // DRIVE NOT READY: not a disk image
 +   bool writable = true;
 +   if (!u->img.open(u->vol, path, O_RDWR))                                        // no O_CREAT: nothing is created
 +   { writable = false; if (!u->img.open(u->vol, path, O_RDONLY)) return 62; }
-+   if (d64_open_size(&u->d, TD_ReadSector, u, size)) { u->img.close(); return 74; }   // format (d64 / d71 / d81) comes from the size
++   if (dnp ? d64_open_dnp(&u->d, TD_ReadSector, u, size)                          // .dnp by name (read-only in the engine for now),
++           : d64_open_size(&u->d, TD_ReadSector, u, size)) { u->img.close(); return 74; }   // d64 / d71 / d81 from the size
 +   u->d.write = writable ? TD_WriteSector : NULL;
 +   TD_LoadErrTab(u, size);
 +   u->mounted = true; ImageWriteBackForget(&u->wb);
@@ -1627,12 +1636,14 @@ index 0000000..4b1c12c
 +   return 0;
 +}
 +
-+// 0 = a readable file of at least D64 size; else 62 (not found) / 74 (not a disk image), reason in msg.
++// 0 = a readable file of at least D64 size (a .dnp: a multiple of 64 KB, up to 255 tracks); else 62 (not found) / 74 (not a disk
++// image), reason in msg.
 +FLASHMEM static int TD_CheckImage(FS *fs, const char *path, char *msg, size_t cap)
 +{
 +   File probe = fs->open(path, FILE_READ);
 +   if (!probe) { snprintf(msg, cap, "file not found"); return 62; }
-+   bool bad = probe.isDirectory() || probe.size() < 174848;
++   bool bad = probe.isDirectory();
++   if (!bad) { uint32_t size = probe.size(); bad = TD_IsDnp(path) ? size == 0 || size % 65536 || size > 255u * 65536 : size < 174848; }
 +   probe.close();
 +   if (bad) { snprintf(msg, cap, "not a disk image"); return 74; }
 +   return 0;
@@ -2816,10 +2827,10 @@ index 0000000..caf329b
 +};
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c
 new file mode 100644
-index 0000000..291f87b
+index 0000000..536184b
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.c
-@@ -0,0 +1,1208 @@
+@@ -0,0 +1,1235 @@
 +#include "tdrive.h"
 +#include "td_cfg.h"
 +#include <string.h>
@@ -2831,7 +2842,7 @@ index 0000000..291f87b
 +/* ---- status channel ---------------------------------------------------- */
 +static const struct { uint8_t code; const char *msg; } MSGS[] = {
 +    {0, " OK"}, {1, "FILES SCRATCHED"}, {26, "WRITE PROTECT ON"}, {30, "SYNTAX ERROR"},
-+    {31, "SYNTAX ERROR"}, {33, "SYNTAX ERROR"}, {34, "SYNTAX ERROR"}, {62, "FILE NOT FOUND"}, {63, "FILE EXISTS"}, {64, "FILE TYPE MISMATCH"},
++    {31, "SYNTAX ERROR"}, {33, "SYNTAX ERROR"}, {34, "SYNTAX ERROR"}, {39, "FILE NOT FOUND"}, {62, "FILE NOT FOUND"}, {63, "FILE EXISTS"}, {64, "FILE TYPE MISMATCH"},
 +    {20, "READ ERROR"}, {21, "READ ERROR"}, {22, "READ ERROR"}, {23, "READ ERROR"}, {24, "READ ERROR"}, {27, "READ ERROR"},
 +    {29, "DISK ID MISMATCH"}, {25, "WRITE ERROR"}, {50, "RECORD NOT PRESENT"}, {51, "OVERFLOW IN RECORD"}, {52, "FILE TOO LARGE"}, {65, "NO BLOCK"}, {66, "ILLEGAL TRACK OR SECTOR"}, {70, "NO CHANNEL"}, {72, "DISK FULL"}, {73, "TRTDRIVE V1.0"}, {74, "DRIVE NOT READY"},
 +};
@@ -2898,6 +2909,7 @@ index 0000000..291f87b
 +    u->disk = NULL;
 +    if (v && v->host.pop) v->host.pop(v->host.ctx, u->index, &d);
 +    u->disk = d;
++    if (d && d->fmt == D64_FMT_DNP && u->rs_t) { d->hdr_t = u->rs_t; d->hdr_s = u->rs_s; }   /* the .DNP sub-directory it was in */
 +}
 +
 +VD_COLD static void chan_close(td_unit_t *u, int ch)
@@ -3002,9 +3014,9 @@ index 0000000..291f87b
 +    return o;
 +}
 +
-+static const char *const DIRTYPES[8] = { "DEL", "SEQ", "PRG", "USR", "REL", "???", "???", "???" };
++static const char *const DIRTYPES[8] = { "DEL", "SEQ", "PRG", "USR", "REL", "CBM", "DIR", "???" };
 +
-+/* 64, 71 or 81 for a name ending in .D64 / .D71 / .D81 (PETSCII or ASCII, either case), else 0 */
++/* 64, 71 or 81 for a name ending in .D64 / .D71 / .D81, 1 for .DNP (a CMD native partition) (PETSCII or ASCII, either case), else 0 */
 +VD_COLD static int image_kind(const char *s)
 +{
 +    size_t l = strlen(s);
@@ -3014,10 +3026,17 @@ index 0000000..291f87b
 +    if (e[2] == '6' && e[3] == '4') return 64;
 +    if (e[2] == '7' && e[3] == '1') return 71;
 +    if (e[2] == '8' && e[3] == '1') return 81;
++    if (((e[2] & 0x7F) | 0x20) == 'n' && ((e[3] & 0x7F) | 0x20) == 'p') return 1;
 +    return 0;
 +}
 +
-+VD_COLD static const char *image_tag(const char *s) { int k = image_kind(s); return k == 71 ? "D71" : k == 81 ? "D81" : "D64"; }
++VD_COLD static const char *image_tag(const char *s)
++{
++    int k = image_kind(s);
++    return k == 71 ? "D71" : k == 81 ? "D81" : k == 1 ? "DNP" : "D64";
++}
++
++VD_COLD static int is_dnp(const td_unit_t *u) { return u->disk && u->disk->fmt == D64_FMT_DNP; }
 +
 +/* ---- aliases for host names the C64 cannot use (see tdrive.h) ---- */
 +VD_COLD static int alias_ok(char c)
@@ -3065,11 +3084,12 @@ index 0000000..291f87b
 +}
 +
 +/* Is a name with "/" in it a host path? "/" is a legal character in a disk file name ("A/B"), so with an image mounted only a
-+ * name that really walks somewhere is a path: a leading "/", a component with an image suffix, or "..". With nothing mounted every "/" is one. */
++ * name that really walks somewhere is a path: a leading "/", a component with an image suffix, or "..". With nothing mounted every "/" is one,
++ * and in a .DNP too (its sub-directories are walked as on a CMD drive). */
 +VD_COLD static int is_path(const td_unit_t *u, const char *s)
 +{
 +    if (!strchr(s, '/')) return 0;
-+    if (!u->disk || *s == '/') return 1;
++    if (!u->disk || *s == '/' || is_dnp(u)) return 1;
 +    for (;;) {
 +        size_t n = strcspn(s, "/");
 +        char c[TD_CMDBUF];
@@ -3085,7 +3105,10 @@ index 0000000..291f87b
 +/* Follow "[/]dir/dir/image.d64[/rest]" on the host: a leading "/" starts at the card root, ".." (or the left arrow "_") goes
 + * up, a component with an image suffix is mounted, any other component is a folder. A component with a wildcard is not
 + * entered: it ends the walk as the pattern. *rest points at what is left (the file name after an image, a pattern, or ""
-+ * when the path ended on the folder / image). Returns 0 or a DOS error code. Modifies p. */
++ * when the path ended on the folder / image). Returns 0 or a DOS error code. Modifies p.
++ * Inside a .DNP the walk goes on in the image: a component naming one of its DIR entries enters that sub-directory, ".." / "_"
++ * goes to the parent (from the image's root: out of the image, as for a .D64), and a last component that is no DIR entry is
++ * what is left (a file name); one before the last is 39 (no such directory). */
 +VD_COLD static int path_walk(tdrive_t *v, int unit, td_unit_t *u, char *p, char **rest)
 +{
 +    const td_host_t *h = &v->host;
@@ -3099,15 +3122,23 @@ index 0000000..291f87b
 +        if (!*c) continue;                                                  /* "//" or a trailing "/" */
 +        if (strpbrk(c, "*?")) { if (sl) *sl = '/'; *rest = c; return 0; }
 +        if (!strcmp(c, "..") || !strcmp(c, "_")) {
-+            if (u->disk) leave_image(v, unit, u);                           /* up from an image = unmount */
++            if (is_dnp(u) && (r = d64_dir_up(u->disk)) != 0) { if (r < 0) return 74; }   /* up inside the image */
++            else if (u->disk) leave_image(v, unit, u);                      /* up from an image = unmount */
 +            else if ((r = h->chdir(h->ctx, unit, ".."))) return r;
++        } else if (is_dnp(u)) {
++            r = d64_dir_enter(u->disk, c);
++            if (r == D64_E_NOTFOUND) {
++                if (sl) return 39;                                          /* a directory on the way (or "NAME/") that is not there */
++                *rest = c;                                                  /* the last one: a file name */
++                return 0;
++            }
++            if (r) return 74;
 +        } else if (image_kind(c)) {
 +            d64_t *d = NULL;
 +            leave_image(v, unit, u);
 +            if ((r = h->mount(h->ctx, unit, c, &d))) return r;
 +            u->disk = d;
-+            *rest = p;
-+            return 0;
++            if (!is_dnp(u)) { *rest = p; return 0; }                        /* a .DNP: the rest may walk its sub-directories */
 +        } else {
 +            leave_image(v, unit, u);
 +            if ((r = h->chdir(h->ctx, unit, c))) return r;
@@ -3191,6 +3222,7 @@ index 0000000..291f87b
 +{
 +    if (u->restore_ch) chan_close(u, u->restore_ch - 1);
 +    v->host.push(v->host.ctx, unit);
++    u->rs_t = u->disk ? u->disk->hdr_t : 0; u->rs_s = u->disk ? u->disk->hdr_s : 0;   /* the host's pop re-mounts at the image's root */
 +}
 +VD_COLD static void end_temp(td_unit_t *u, int ch)
 +{
@@ -3420,7 +3452,12 @@ index 0000000..291f87b
 +        d64_entry_t e;
 +        int r = d64_find(u->disk, o.name, &e);
 +        if (r < 0) { err_from(u, r); chan_close(u, ch); return; }
-+        if (r == 0) { set_err(u, 62, 0, 0); chan_close(u, ch); return; }
++        if (r == 0) {                                                          /* a .DNP sub-directory is no file: 64, as on a CMD drive */
++            uint8_t ht = u->disk->hdr_t, hs = u->disk->hdr_s;
++            int dir = !strpbrk(o.name, "*?") && d64_dir_enter(u->disk, o.name) == 0;
++            u->disk->hdr_t = ht; u->disk->hdr_s = hs;
++            set_err(u, dir ? 64 : 62, 0, 0); chan_close(u, ch); return;
++        }
 +        d64_file_open(u->disk, &e, &c->u.r);
 +        c->mode = 1;
 +    } else if (mode == 'A') {                                                  /* ",A": more data at the end of an existing file */
@@ -3457,7 +3494,7 @@ index 0000000..291f87b
 +    char *rest;
 +    int r = path_walk(v, unit, u, path, &rest);
 +    if (r) set_err(u, (uint8_t)r, 0, 0);
-+    else if (*rest) set_err(u, 33, 0, 0);                        /* something after the image / a wildcard: not a directory */
++    else if (*rest) set_err(u, is_dnp(u) && !strpbrk(rest, "*?") ? 39 : 33, 0, 0);   /* something after the image / a wildcard (.DNP: no such directory) */
 +}
 +
 +/* "N:[path/]NAME.D64[,ID]" (.D71, .D81) with nothing mounted: a new blank image in the current folder (or the folder the path
@@ -3479,6 +3516,7 @@ index 0000000..291f87b
 +    char *leaf = strrchr(path, '/');
 +    int kind = image_kind(path);
 +    if (!kind || strpbrk(path, "*?")) { set_err(u, 33, 0, 0); return; }
++    if (kind == 1) { set_err(u, 31, 0, 0); return; }              /* a new .DNP: no formatter for CMD native partitions yet */
 +    if (leaf) {                                                   /* the folders first, then the new file in the last one */
 +        char *rest, root[2] = { '/', 0 };
 +        *leaf++ = 0;
@@ -4030,10 +4068,10 @@ index 0000000..291f87b
 +}
 diff --git a/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h
 new file mode 100644
-index 0000000..22ccdb6
+index 0000000..36c9358
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/tdrive/tdrive.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,166 @@
 +/* Virtual IEC drive: the Teensy-side state machine behind the KERNAL mailbox.
 + * Units 0/1 = devices 8/9, each backed by an optional mounted d64_t.
 + * One mailbox command in, one result out; no I/O other than the d64 and host callbacks. */
@@ -4136,6 +4174,7 @@ index 0000000..22ccdb6
 +    struct tdrive_s *owner;     /* back pointer: closing a channel may have to restore the host state */
 +    uint8_t  index;             /* this unit's number (0/1) */
 +    uint8_t  restore_ch;        /* channel + 1 whose close restores the folder / image selected before a path listing; 0 = none */
++    uint8_t  rs_t, rs_s;        /* with it: the .DNP directory in use then (d64_t.hdr_t/hdr_s; 0 = not a .DNP) */
 +    d64_t   *disk;              /* NULL: no image mounted */
 +    uint8_t  present;           /* device answers on the bus */
 +    uint8_t  slot_of[16];       /* channel number -> pool slot + 1 (0 = not open) */
@@ -6196,7 +6235,7 @@ index 9bc9643..2db3509 100644
  #endif /* TEENSYROMC64_BIN_H */
 diff --git a/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h b/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h
 new file mode 100644
-index 0000000..861ab02
+index 0000000..8bedc20
 --- /dev/null
 +++ b/Source/Teensy/TRMenuFiles/ROMs/tdconfig.prg.h
 @@ -0,0 +1,532 @@
@@ -6286,8 +6325,8 @@ index 0000000..861ab02
 +	0xdf, 0xc9, 0xd6, 0xd0, 0x0f, 0xad, 0x0a, 0xdf, 0xc9, 0x64, 0xd0, 0x08,
 +	0xa9, 0x00, 0xa2, 0xdf, 0xa0, 0x80, 0xd0, 0x05, 0xca, 0xd0, 0xd1, 0x38,
 +	0x60, 0x8c, 0x6c, 0x51, 0x8d, 0x6d, 0x51, 0x8e, 0x6e, 0x51, 0xa2, 0x00,
-+	0xe0, 0x27, 0xf0, 0x20, 0xbd, 0x62, 0x20, 0x85, 0xfd, 0xbd, 0x63, 0x20,
-+	0x85, 0xfe, 0xbd, 0x64, 0x20, 0x18, 0x6d, 0x6d, 0x51, 0xa0, 0x00, 0x91,
++	0xe0, 0x27, 0xf0, 0x20, 0xbd, 0x65, 0x20, 0x85, 0xfd, 0xbd, 0x66, 0x20,
++	0x85, 0xfe, 0xbd, 0x67, 0x20, 0x18, 0x6d, 0x6d, 0x51, 0xa0, 0x00, 0x91,
 +	0xfd, 0xc8, 0xad, 0x6e, 0x51, 0x91, 0xfd, 0xe8, 0xe8, 0xe8, 0xd0, 0xdc,
 +	0x18, 0x60, 0xa9, 0x0e, 0x20, 0x3d, 0x0c, 0xb0, 0x2d, 0xc9, 0x00, 0xf0,
 +	0x29, 0xa9, 0x08, 0x8d, 0x6f, 0x51, 0xa9, 0x00, 0x85, 0x90, 0xad, 0x6f,
@@ -6641,7 +6680,7 @@ index 0000000..861ab02
 +	0x7a, 0x51, 0xc8, 0xd0, 0xdc, 0xad, 0x7a, 0x51, 0x18, 0x60, 0x38, 0x60,
 +	0xa9, 0x2f, 0x8d, 0x2d, 0x4c, 0xa9, 0x01, 0x8d, 0xb7, 0x51, 0xa9, 0x00,
 +	0x8d, 0xbb, 0x51, 0xa9, 0x00, 0x8d, 0xb8, 0x51, 0x8d, 0xb9, 0x51, 0x20,
-+	0x97, 0x1d, 0x20, 0x5d, 0x1f, 0x20, 0x08, 0x0a, 0xc9, 0x5f, 0xd0, 0x01,
++	0x97, 0x1d, 0x20, 0x60, 0x1f, 0x20, 0x08, 0x0a, 0xc9, 0x5f, 0xd0, 0x01,
 +	0x60, 0xc9, 0x91, 0xd0, 0x0b, 0xad, 0xb8, 0x51, 0xf0, 0xef, 0xce, 0xb8,
 +	0x51, 0x4c, 0xf5, 0x1c, 0xc9, 0x11, 0xd0, 0x11, 0xad, 0xb8, 0x51, 0x18,
 +	0x69, 0x01, 0xcd, 0xba, 0x51, 0xb0, 0xda, 0x8d, 0xb8, 0x51, 0x4c, 0xf5,
@@ -6697,38 +6736,38 @@ index 0000000..861ab02
 +	0xa2, 0x00, 0x8e, 0xaa, 0x51, 0xac, 0xa9, 0x51, 0xb9, 0xf7, 0x50, 0xdd,
 +	0x51, 0x1f, 0xd0, 0x10, 0xb9, 0xf8, 0x50, 0xdd, 0x52, 0x1f, 0xd0, 0x08,
 +	0xb9, 0xf9, 0x50, 0xdd, 0x53, 0x1f, 0xf0, 0x0b, 0xee, 0xaa, 0x51, 0xe8,
-+	0xe8, 0xe8, 0xe0, 0x0c, 0x90, 0xdb, 0x60, 0xad, 0xba, 0x51, 0xc9, 0x64,
++	0xe8, 0xe8, 0xe0, 0x0f, 0x90, 0xdb, 0x60, 0xad, 0xba, 0x51, 0xc9, 0x64,
 +	0xb0, 0xf8, 0x20, 0x73, 0x1d, 0xae, 0xba, 0x51, 0xad, 0xaa, 0x51, 0x9d,
 +	0xa4, 0x49, 0xad, 0xbe, 0x51, 0xc9, 0x11, 0x90, 0x02, 0xa9, 0x10, 0x9d,
 +	0x40, 0x49, 0x8d, 0x89, 0x51, 0xa0, 0x00, 0xcc, 0x89, 0x51, 0xb0, 0x0e,
 +	0x98, 0x18, 0x6d, 0xbc, 0x51, 0xaa, 0xbd, 0xf7, 0x50, 0x91, 0xfd, 0xc8,
 +	0xd0, 0xed, 0xee, 0xba, 0x51, 0x60, 0x44, 0x49, 0x52, 0x44, 0x36, 0x34,
-+	0x44, 0x37, 0x31, 0x44, 0x38, 0x31, 0xa2, 0x03, 0x20, 0x57, 0x0b, 0x20,
-+	0xb8, 0x0a, 0x06, 0xc2, 0x52, 0x4f, 0x57, 0x53, 0x45, 0x3a, 0x20, 0x07,
-+	0x00, 0xa9, 0x2d, 0x85, 0xfd, 0xa9, 0x4c, 0x85, 0xfe, 0xad, 0xb7, 0x51,
-+	0x8d, 0x89, 0x51, 0x20, 0x14, 0x0b, 0x20, 0xaa, 0x0a, 0xa9, 0x00, 0x8d,
-+	0xa5, 0x51, 0xad, 0xb9, 0x51, 0x18, 0x6d, 0xa5, 0x51, 0x8d, 0xa4, 0x51,
-+	0xad, 0xa5, 0x51, 0x18, 0x69, 0x04, 0xaa, 0x20, 0x57, 0x0b, 0xad, 0xa4,
-+	0x51, 0xcd, 0xba, 0x51, 0x90, 0x06, 0x20, 0xaa, 0x0a, 0x4c, 0x15, 0x20,
-+	0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20, 0xb8, 0x0a, 0x05, 0x00, 0xa9, 0x20,
-+	0xae, 0xa4, 0x51, 0xec, 0xb8, 0x51, 0xd0, 0x02, 0xa9, 0x3e, 0x20, 0x23,
-+	0x0a, 0x20, 0xb8, 0x0a, 0x07, 0x00, 0xad, 0xa4, 0x51, 0xcd, 0xb8, 0x51,
-+	0xd0, 0x05, 0xa9, 0x12, 0x20, 0x23, 0x0a, 0xad, 0xa4, 0x51, 0x20, 0x73,
-+	0x1d, 0xa9, 0x11, 0x20, 0x24, 0x0b, 0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20,
-+	0xb8, 0x0a, 0x92, 0x06, 0x20, 0x00, 0xae, 0xa4, 0x51, 0xbd, 0xa4, 0x49,
-+	0x8d, 0xa9, 0x51, 0x0a, 0x6d, 0xa9, 0x51, 0xaa, 0xbd, 0x51, 0x1f, 0x20,
-+	0x9d, 0x0a, 0xbd, 0x52, 0x1f, 0x20, 0x9d, 0x0a, 0xbd, 0x53, 0x1f, 0x20,
-+	0x9d, 0x0a, 0xa9, 0x11, 0x8d, 0x83, 0x51, 0x20, 0xaa, 0x0a, 0xee, 0xa5,
-+	0x51, 0xad, 0xa5, 0x51, 0xc9, 0x10, 0xb0, 0x03, 0x4c, 0x89, 0x1f, 0xa2,
-+	0x15, 0x20, 0x57, 0x0b, 0x20, 0xb8, 0x0a, 0x12, 0x05, 0xd2, 0x45, 0x54,
-+	0x55, 0x52, 0x4e, 0x92, 0x06, 0x20, 0xcf, 0x50, 0x45, 0x4e, 0x2f, 0xd3,
-+	0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x20, 0x12, 0x05, 0x5f, 0x92, 0x06,
-+	0x20, 0xc3, 0x41, 0x4e, 0x43, 0x45, 0x4c, 0x00, 0x20, 0xaa, 0x0a, 0xa2,
-+	0x16, 0x20, 0x57, 0x0b, 0x20, 0xaa, 0x0a, 0xa2, 0x17, 0x20, 0x57, 0x0b,
-+	0x4c, 0xaa, 0x0a, 0x3c, 0x08, 0x06, 0x9f, 0x09, 0x00, 0xa6, 0x09, 0x03,
-+	0xad, 0x09, 0x03, 0x2e, 0x0c, 0x01, 0x3e, 0x0c, 0x00, 0x49, 0x0c, 0x03,
-+	0x64, 0x0c, 0x04, 0x67, 0x0c, 0x04, 0x6f, 0x0c, 0x02, 0x72, 0x0c, 0x02,
-+	0x99, 0x0c, 0x05, 0x9f, 0x0c, 0x01
++	0x44, 0x37, 0x31, 0x44, 0x38, 0x31, 0x44, 0x4e, 0x50, 0xa2, 0x03, 0x20,
++	0x57, 0x0b, 0x20, 0xb8, 0x0a, 0x06, 0xc2, 0x52, 0x4f, 0x57, 0x53, 0x45,
++	0x3a, 0x20, 0x07, 0x00, 0xa9, 0x2d, 0x85, 0xfd, 0xa9, 0x4c, 0x85, 0xfe,
++	0xad, 0xb7, 0x51, 0x8d, 0x89, 0x51, 0x20, 0x14, 0x0b, 0x20, 0xaa, 0x0a,
++	0xa9, 0x00, 0x8d, 0xa5, 0x51, 0xad, 0xb9, 0x51, 0x18, 0x6d, 0xa5, 0x51,
++	0x8d, 0xa4, 0x51, 0xad, 0xa5, 0x51, 0x18, 0x69, 0x04, 0xaa, 0x20, 0x57,
++	0x0b, 0xad, 0xa4, 0x51, 0xcd, 0xba, 0x51, 0x90, 0x06, 0x20, 0xaa, 0x0a,
++	0x4c, 0x18, 0x20, 0xa9, 0xff, 0x8d, 0x83, 0x51, 0x20, 0xb8, 0x0a, 0x05,
++	0x00, 0xa9, 0x20, 0xae, 0xa4, 0x51, 0xec, 0xb8, 0x51, 0xd0, 0x02, 0xa9,
++	0x3e, 0x20, 0x23, 0x0a, 0x20, 0xb8, 0x0a, 0x07, 0x00, 0xad, 0xa4, 0x51,
++	0xcd, 0xb8, 0x51, 0xd0, 0x05, 0xa9, 0x12, 0x20, 0x23, 0x0a, 0xad, 0xa4,
++	0x51, 0x20, 0x73, 0x1d, 0xa9, 0x11, 0x20, 0x24, 0x0b, 0xa9, 0xff, 0x8d,
++	0x83, 0x51, 0x20, 0xb8, 0x0a, 0x92, 0x06, 0x20, 0x00, 0xae, 0xa4, 0x51,
++	0xbd, 0xa4, 0x49, 0x8d, 0xa9, 0x51, 0x0a, 0x6d, 0xa9, 0x51, 0xaa, 0xbd,
++	0x51, 0x1f, 0x20, 0x9d, 0x0a, 0xbd, 0x52, 0x1f, 0x20, 0x9d, 0x0a, 0xbd,
++	0x53, 0x1f, 0x20, 0x9d, 0x0a, 0xa9, 0x11, 0x8d, 0x83, 0x51, 0x20, 0xaa,
++	0x0a, 0xee, 0xa5, 0x51, 0xad, 0xa5, 0x51, 0xc9, 0x10, 0xb0, 0x03, 0x4c,
++	0x8c, 0x1f, 0xa2, 0x15, 0x20, 0x57, 0x0b, 0x20, 0xb8, 0x0a, 0x12, 0x05,
++	0xd2, 0x45, 0x54, 0x55, 0x52, 0x4e, 0x92, 0x06, 0x20, 0xcf, 0x50, 0x45,
++	0x4e, 0x2f, 0xd3, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x20, 0x20, 0x12, 0x05,
++	0x5f, 0x92, 0x06, 0x20, 0xc3, 0x41, 0x4e, 0x43, 0x45, 0x4c, 0x00, 0x20,
++	0xaa, 0x0a, 0xa2, 0x16, 0x20, 0x57, 0x0b, 0x20, 0xaa, 0x0a, 0xa2, 0x17,
++	0x20, 0x57, 0x0b, 0x4c, 0xaa, 0x0a, 0x3c, 0x08, 0x06, 0x9f, 0x09, 0x00,
++	0xa6, 0x09, 0x03, 0xad, 0x09, 0x03, 0x2e, 0x0c, 0x01, 0x3e, 0x0c, 0x00,
++	0x49, 0x0c, 0x03, 0x64, 0x0c, 0x04, 0x67, 0x0c, 0x04, 0x6f, 0x0c, 0x02,
++	0x72, 0x0c, 0x02, 0x99, 0x0c, 0x05, 0x9f, 0x0c, 0x01
 +};
 +
 +#endif /* TDCONFIG_PRG_H */

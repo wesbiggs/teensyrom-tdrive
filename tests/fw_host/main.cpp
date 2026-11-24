@@ -763,6 +763,17 @@ int main(int argc, char **argv)
     cmd15("CD:/"); check("unmount drops the table", status15() == "00, OK,00,00\r" && !tdUnit[0].errTab);
     cmd15("CD:OKTAB.D64"); check("an all-OK error table is not kept", status15() == "00, OK,00,00\r" && tdUnit[0].mounted && !tdUnit[0].errTab);
     check("... and the image lists", fast_load(8, "$").find("OKTAB") != std::string::npos);
+    // ---- .DNP, CMD native partitions (docs/DESIGN.md 66): by name, read-only ----
+    cmd15("CD:/"); status15();
+    cmd15("CD:CMD.DNP"); check("DNP mounts (by its name)", status15() == "00, OK,00,00\r" && tdUnit[0].mounted && tdUnit[0].d.fmt == D64_FMT_DNP && tdUnit[0].d.tracks == 4);
+    d = fast_load(8, "$");
+    check("DNP listing: header and a DIR entry", d.find("CMDNATIVE") != std::string::npos && d.find("DIR") != std::string::npos);
+    cmd15("CD:GAMES"); check("CD into a DNP sub-directory", status15() == "00, OK,00,00\r" && fast_load(8, "INGAMES", &rc) == std::string("\x00\xc0" "in games", 10) && rc == 0);
+    check("SAVE to a DNP: write protect", fast_save(8, "NOPE", "x") != 0 && status15().rfind("26,", 0) == 0);
+    cmd15("CD:/"); status15();
+    check("a path into a DNP sub-directory", fast_load(8, "/CMD.DNP/GAMES/DEEP/BOTTOM", &rc).size() == 1026 && rc == 0);
+    cmd15("CD:/"); status15();
+    cmd15("CD:ODD.DNP"); check("a .dnp that is not whole tracks is refused", status15().rfind("74,", 0) == 0 && !tdUnit[0].mounted);
     cmd15("CD:/"); status15();
     cmd15("UI"); check("UI answers 73", status15().rfind("73,", 0) == 0);
     cmd15("CD:/"); status15();
@@ -916,6 +927,9 @@ int main(int argc, char **argv)
         g_tick = 1;
         { std::ifstream f(SD.root / ".tdrive"); std::string t((std::istreambuf_iterator<char>(f)), {}); check("... and it is the remembered one", t == "/SUB/COPY.D64"); }
         check("remote set: D81 works too", TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg) == 0 && tdUnit[0].d.fmt == D64_FMT_D81);
+        check("remote set: a DNP too", TDrive_RemoteSet(0, "/CMD.DNP", msg, sizeof msg) == 0 && tdUnit[0].d.fmt == D64_FMT_DNP);
+        check("remote set: a DNP of no whole tracks is refused", TDrive_RemoteSet(0, "/ODD.DNP", msg, sizeof msg) == 74 && tdUnit[0].d.fmt == D64_FMT_DNP);
+        TDrive_RemoteSet(0, "/BIG.D81", msg, sizeof msg);                    // as the following checks expect
 
         check("remote set: USB unit", TDrive_RemoteSet(1, "/USB.D64", msg, sizeof msg) == 0 && has(1, "\"path\":\"/USB.D64\"") && has(0, "/BIG.D81"));
 

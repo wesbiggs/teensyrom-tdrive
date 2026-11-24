@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.0.76
+
+### Added
+- **`.dnp` images (CMD native partitions), read-only.** The format CMD HD, RAMLink and FD drives keep their native partitions in, which
+  sd2iec mounts and DirMaster edits: up to 255 tracks of 256 sectors (16 MB), with sub-directories. Mount one like any image
+  (`CD:GAMES.DNP`, paths, the Alt-button list, `trvdrive` set, TDrive Config's browser, the remembered mount), list and load from it,
+  and walk its sub-directories: `CD:SUB` or the CMD form `CD/SUB`, `CD:..` / `CD:←` up (from its root: out of the image), names with a
+  path (`LOAD"SUB/DEEP/FILE"`, `LOAD"/SUB/:FILE"`, `LOAD"$SUB/"`, from the card `LOAD"/GAMES.DNP/SUB/FILE"`). Sub-directories show as
+  `DIR` in the listing; loading one by name answers `64`, a missing one `39`. Every write (`SAVE`, `S:`, `N:`, `MD:`, ...) answers
+  `26,WRITE PROTECT ON` for now, and `N:NEW.DNP` with nothing mounted answers `31`. A `.dnp` is known by its extension only (a 3-track
+  one is as long as a 40-track `.d64`). The layout comes from VICE's source; no image made by DirMaster, sd2iec or a CMD drive has been
+  read yet. Host tests (engine, drive, glue, TDrive Config in py65; TeensyROM's `npm test` with the new engine); not in VICE (it has no
+  `.dnp` support); **not on hardware**. `docs/DESIGN.md` section 66.
+
+### Changed
+- Listings name file types 5 and 6 `CBM` and `DIR` (1581 partitions, CMD directories) instead of `???`.
+
+### Build
+- The disk image engine change (`d64.c`/`d64.h`) goes on the fork's `tdrive-base` as commit `4f805afc` (on `9df749d5`), which
+  `firmware/UPSTREAM` names: push that branch before `tools/build_firmware.sh` or CI can fetch it.
+  `tools/dnp.py` builds `.dnp` test images (`c1541` makes none); `make test-d64` runs `tests/test_dnp.py`.
+
 ## v0.9.0.75
 
 ### Changed

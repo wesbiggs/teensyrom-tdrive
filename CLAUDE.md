@@ -2,13 +2,13 @@
 
 ## What this is
 A replacement C64 KERNAL (the machine's own ROM, read by DMA and patched in memory by the firmware; or `sd:/TDrive/kernal.bin`) that the **TeensyROM+ (TR+)** serves live, plus the Teensy-side firmware that makes
-the SD card and the USB drive behave as IEC drives backed by `.d64` / `.d71` / `.d81` images. KERNAL serial calls for those devices go to
+the SD card and the USB drive behave as IEC drives backed by `.d64` / `.d71` / `.d81` images (and, read-only, `.dnp` CMD native partitions). KERNAL serial calls for those devices go to
 a mailbox (IO1 `$DE10` registers + a 128-byte IO2 window at `$DF80`) instead of the bit-banged bus; any other device number still uses the
 real IEC code, so physical drives keep working. LOAD/SAVE have block-transfer fast paths. Device numbers are automatic (SD first, USB
 second, the first free numbers from 8 up: the KERNAL probes the real bus on the first disk access of a run) or fixed from BASIC with
 `OPEN15,8,15,"U0>"+CHR$(n)` (kept in EEPROM, `CHR$(0)` = automatic, no reflash). Names and `CD` take paths: `LOAD"$/GAMES/G.D64",8`.
 
-Full design and per-milestone notes: `docs/DESIGN.md` (sections 1-60, in order of construction).
+Full design and per-milestone notes: `docs/DESIGN.md` (sections 1-66, in order of construction).
 Firmware integration and usage: `firmware/README.md`.
 
 ## Status (read this first)
@@ -214,6 +214,14 @@ Firmware integration and usage: `firmware/README.md`.
   the border counters in the remote get's JSON (`"dbg"`), and the Alt-button step trace: serial lines and the core's CrashReport breadcrumbs, kept across a reboot (`TD_TraceBoot` in `setup()`,
   `TD_TraceButton` in `loop()`, both `make_tr_patch.sh` edits), printed at the next TDrive PreStart; `!nodma` in the config file switches without any hold. The code ran on hardware as the
   0.9.0.69 A/B build. Why 0.9.0.64-0.9.0.67 crashed is not known (a non-"None" Alt setting would fit; not confirmed).
+* 0.9.0.76: **`.dnp` images (CMD native partitions), read-only** (docs/DESIGN.md 66): the shared engine reads the native layout (256 sectors per track,
+  1-255 tracks, bitmap-only BAM in 1/2-1/33, MSB-first bits) and walks sub-directories (`d64_dir_enter`/`up`/`root`, `d64_t.hdr_t/hdr_s` = the directory in use);
+  every write is `D64_E_RO` (`not_writable()`). Opened by name only (`d64_open_dnp`, the glue's `TD_IsDnp`; a 3-track one is a 40-track d64's size). In `tdrive.c`,
+  `path_walk` stays inside a DNP (DIR entries entered, `..`/`_` up, out from its root; a missing directory is `39`), every `/` is a path there, a DIR opened as a file is `64`,
+  `N:X.DNP` is `31`; TDrive Config's browser lists and mounts them. Layout from VICE's vdrive source (VICE has no bare `.dnp`; `c1541` cannot make or read one), test images from
+  `tools/dnp.py`. **The engine change is commit `4f805afc` on the fork's `tdrive-base` (on `9df749d5`), named in `firmware/UPSTREAM`: push it before `build_firmware.sh`/CI.**
+  Unit tests (`tests/test_dnp.py`), drive (`test_vio.py` `test_dnp_*`), glue (`tests/fw_host`), TDrive Config (py65), TeensyROM `npm test` (473), all three firmware builds
+  (TR+ main image RAM1 free for locals 56636, padding 24680); **not on hardware, and no DirMaster / sd2iec / CMD-made image read yet** (the bit order and header offsets rest on VICE's source).
 * **0.9.0.69 (host test, not on hardware):** a remote swap or an Alt-button switch closes the unit's channels on the old image before it mounts the new one
   (`tdrive_close_unit()` in `TDrive_RemoteSet`). Before, a write file a program had left open was closed against the new image's `d64_t` and wrote its last
   block, BAM and entry into the new disk (0.9.0.8-0.9.0.68).
@@ -277,7 +285,7 @@ Firmware integration and usage: `firmware/README.md`.
 ## Layout
 ```
 d64/            portable C99 library, also compiled as C++ by the firmware (keep it C++-clean!)
-  d64.c/.h        D64/D71/D81 engine: geometry, BAM, directory, file chains, create/write/scratch/rename/format, BASIC listing builder.
+  d64.c/.h        D64/D71/D81 engine: geometry, BAM, directory, file chains, create/write/scratch/rename/format, BASIC listing builder; DNP read-only with sub-directories.
   DiskImage.h     d64.c/.h/DiskImage.h/WriteBack.h are byte-identical copies of TeensyROM's Source/Teensy/DiskImage (the fork's tdrive-base branch),
                   the shared engine: change them there and copy back (make_tr_patch.sh refuses a mismatch; docs/DESIGN.md 55)
   tdrive.c/.h     virtual IEC drive: channel pool, OPEN/LOAD/SAVE/command channel, CD:/path walking/mount hooks, U0> pins, bus-scan numbers
@@ -296,8 +304,8 @@ firmware/       TeensyROM integration: IOH_TDrive.c (Special IO), IOH_TDriveSwif
                 IOH_TDriveAgent.c (the agent's Special IO, both boards), and
                 teensyrom-tdrive.patch (git apply onto TeensyROM); tdrive_probe.asm (the TR menu's launch-time bus probe, ACME, inserted into MainMenu.asm)
 tools/          build.py (patch overlay; `--table` writes the patches as `td_kpatch.h` for the firmware), build_agent.py (the agent as `td_agent.h`), make_tr_patch.sh (regenerate the TeensyROM patch), tdrive_mock.py (VICE mock),
-                d64py.py (ctypes wrappers incl. register-level VIO), xref.py (reference finder over a disassembly)
-tests/          test_d64*.py, test_tdrive.py, test_vio.py, test_vvec.py (unit), fw_host/ (glue vs host stubs; plain.cpp = the plain-TR build), devcfg.c,
+                d64py.py (ctypes wrappers incl. register-level VIO), xref.py (reference finder over a disassembly), dnp.py (.dnp test images, VICE's native layout)
+tests/          test_d64*.py, test_dnp.py, test_tdrive.py, test_vio.py, test_vvec.py (unit), fw_host/ (glue vs host stubs; plain.cpp = the plain-TR build), devcfg.c,
                 test_tdconfig.py + c64_sim.py (TDrive Config's PRG in py65, KERNAL calls answered in Python), test_tdcopy.py (TDCOPY in py65 against tdrive.c),
                 test_banner.py, test_reset_hook.py, test_vcall_gate.py, test_dmatest.py (py65),
                 menuprobe_vice.py (the menu's probe routine in VICE with true-drive 1541s), variants_vice.py (the patch on each whitelisted ROM in VICE)
@@ -404,5 +412,5 @@ The full `make test`, VICE runs included, works in a cloud session; do not skip 
 4. **TeensyROM menu integration** (last, only if the BASIC utility feels clumsy): a `Shift-D` hotkey like the existing `Shift-K`
    (KERNAL image) / `Shift-R` (REU) that sets the highlighted file as the disk for device 8/9. Needs changes to the 6502 menu
    (`Source/C64/MainMenuCRT`, ACME) and regenerated headers, and probably an EEPROM map extension that upstream must agree to.
-5. Smaller follow-ups: D81 sub-directories/partitions, writing plain files to the card,
+5. Smaller follow-ups: D81 sub-directories/partitions, writing to `.dnp` images (allocator, directory growth, `MD`/`RD`, `N:`, `V`; docs/DESIGN.md 66), writing plain files to the card,
    a scan that re-runs after a device is switched on later.

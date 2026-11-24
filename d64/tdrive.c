@@ -9,7 +9,7 @@
 /* ---- status channel ---------------------------------------------------- */
 static const struct { uint8_t code; const char *msg; } MSGS[] = {
     {0, " OK"}, {1, "FILES SCRATCHED"}, {26, "WRITE PROTECT ON"}, {30, "SYNTAX ERROR"},
-    {31, "SYNTAX ERROR"}, {33, "SYNTAX ERROR"}, {34, "SYNTAX ERROR"}, {62, "FILE NOT FOUND"}, {63, "FILE EXISTS"}, {64, "FILE TYPE MISMATCH"},
+    {31, "SYNTAX ERROR"}, {33, "SYNTAX ERROR"}, {34, "SYNTAX ERROR"}, {39, "FILE NOT FOUND"}, {62, "FILE NOT FOUND"}, {63, "FILE EXISTS"}, {64, "FILE TYPE MISMATCH"},
     {20, "READ ERROR"}, {21, "READ ERROR"}, {22, "READ ERROR"}, {23, "READ ERROR"}, {24, "READ ERROR"}, {27, "READ ERROR"},
     {29, "DISK ID MISMATCH"}, {25, "WRITE ERROR"}, {50, "RECORD NOT PRESENT"}, {51, "OVERFLOW IN RECORD"}, {52, "FILE TOO LARGE"}, {65, "NO BLOCK"}, {66, "ILLEGAL TRACK OR SECTOR"}, {70, "NO CHANNEL"}, {72, "DISK FULL"}, {73, "TRTDRIVE V1.0"}, {74, "DRIVE NOT READY"},
 };
@@ -76,6 +76,7 @@ VD_COLD static void restore_selection(td_unit_t *u)
     u->disk = NULL;
     if (v && v->host.pop) v->host.pop(v->host.ctx, u->index, &d);
     u->disk = d;
+    if (d && d->fmt == D64_FMT_DNP && u->rs_t) { d->hdr_t = u->rs_t; d->hdr_s = u->rs_s; }   /* the .DNP sub-directory it was in */
 }
 
 VD_COLD static void chan_close(td_unit_t *u, int ch)
@@ -180,9 +181,9 @@ VD_COLD static open_spec_t parse_open(const uint8_t *raw, uint8_t len)
     return o;
 }
 
-static const char *const DIRTYPES[8] = { "DEL", "SEQ", "PRG", "USR", "REL", "???", "???", "???" };
+static const char *const DIRTYPES[8] = { "DEL", "SEQ", "PRG", "USR", "REL", "CBM", "DIR", "???" };
 
-/* 64, 71 or 81 for a name ending in .D64 / .D71 / .D81 (PETSCII or ASCII, either case), else 0 */
+/* 64, 71 or 81 for a name ending in .D64 / .D71 / .D81, 1 for .DNP (a CMD native partition) (PETSCII or ASCII, either case), else 0 */
 VD_COLD static int image_kind(const char *s)
 {
     size_t l = strlen(s);
@@ -192,10 +193,17 @@ VD_COLD static int image_kind(const char *s)
     if (e[2] == '6' && e[3] == '4') return 64;
     if (e[2] == '7' && e[3] == '1') return 71;
     if (e[2] == '8' && e[3] == '1') return 81;
+    if (((e[2] & 0x7F) | 0x20) == 'n' && ((e[3] & 0x7F) | 0x20) == 'p') return 1;
     return 0;
 }
 
-VD_COLD static const char *image_tag(const char *s) { int k = image_kind(s); return k == 71 ? "D71" : k == 81 ? "D81" : "D64"; }
+VD_COLD static const char *image_tag(const char *s)
+{
+    int k = image_kind(s);
+    return k == 71 ? "D71" : k == 81 ? "D81" : k == 1 ? "DNP" : "D64";
+}
+
+VD_COLD static int is_dnp(const td_unit_t *u) { return u->disk && u->disk->fmt == D64_FMT_DNP; }
 
 /* ---- aliases for host names the C64 cannot use (see tdrive.h) ---- */
 VD_COLD static int alias_ok(char c)
@@ -243,11 +251,12 @@ VD_COLD static void leave_image(tdrive_t *v, int unit, td_unit_t *u)
 }
 
 /* Is a name with "/" in it a host path? "/" is a legal character in a disk file name ("A/B"), so with an image mounted only a
- * name that really walks somewhere is a path: a leading "/", a component with an image suffix, or "..". With nothing mounted every "/" is one. */
+ * name that really walks somewhere is a path: a leading "/", a component with an image suffix, or "..". With nothing mounted every "/" is one,
+ * and in a .DNP too (its sub-directories are walked as on a CMD drive). */
 VD_COLD static int is_path(const td_unit_t *u, const char *s)
 {
     if (!strchr(s, '/')) return 0;
-    if (!u->disk || *s == '/') return 1;
+    if (!u->disk || *s == '/' || is_dnp(u)) return 1;
     for (;;) {
         size_t n = strcspn(s, "/");
         char c[TD_CMDBUF];
@@ -263,7 +272,10 @@ VD_COLD static int is_path(const td_unit_t *u, const char *s)
 /* Follow "[/]dir/dir/image.d64[/rest]" on the host: a leading "/" starts at the card root, ".." (or the left arrow "_") goes
  * up, a component with an image suffix is mounted, any other component is a folder. A component with a wildcard is not
  * entered: it ends the walk as the pattern. *rest points at what is left (the file name after an image, a pattern, or ""
- * when the path ended on the folder / image). Returns 0 or a DOS error code. Modifies p. */
+ * when the path ended on the folder / image). Returns 0 or a DOS error code. Modifies p.
+ * Inside a .DNP the walk goes on in the image: a component naming one of its DIR entries enters that sub-directory, ".." / "_"
+ * goes to the parent (from the image's root: out of the image, as for a .D64), and a last component that is no DIR entry is
+ * what is left (a file name); one before the last is 39 (no such directory). */
 VD_COLD static int path_walk(tdrive_t *v, int unit, td_unit_t *u, char *p, char **rest)
 {
     const td_host_t *h = &v->host;
@@ -277,15 +289,23 @@ VD_COLD static int path_walk(tdrive_t *v, int unit, td_unit_t *u, char *p, char 
         if (!*c) continue;                                                  /* "//" or a trailing "/" */
         if (strpbrk(c, "*?")) { if (sl) *sl = '/'; *rest = c; return 0; }
         if (!strcmp(c, "..") || !strcmp(c, "_")) {
-            if (u->disk) leave_image(v, unit, u);                           /* up from an image = unmount */
+            if (is_dnp(u) && (r = d64_dir_up(u->disk)) != 0) { if (r < 0) return 74; }   /* up inside the image */
+            else if (u->disk) leave_image(v, unit, u);                      /* up from an image = unmount */
             else if ((r = h->chdir(h->ctx, unit, ".."))) return r;
+        } else if (is_dnp(u)) {
+            r = d64_dir_enter(u->disk, c);
+            if (r == D64_E_NOTFOUND) {
+                if (sl) return 39;                                          /* a directory on the way (or "NAME/") that is not there */
+                *rest = c;                                                  /* the last one: a file name */
+                return 0;
+            }
+            if (r) return 74;
         } else if (image_kind(c)) {
             d64_t *d = NULL;
             leave_image(v, unit, u);
             if ((r = h->mount(h->ctx, unit, c, &d))) return r;
             u->disk = d;
-            *rest = p;
-            return 0;
+            if (!is_dnp(u)) { *rest = p; return 0; }                        /* a .DNP: the rest may walk its sub-directories */
         } else {
             leave_image(v, unit, u);
             if ((r = h->chdir(h->ctx, unit, c))) return r;
@@ -369,6 +389,7 @@ VD_COLD static void begin_temp(tdrive_t *v, int unit, td_unit_t *u)
 {
     if (u->restore_ch) chan_close(u, u->restore_ch - 1);
     v->host.push(v->host.ctx, unit);
+    u->rs_t = u->disk ? u->disk->hdr_t : 0; u->rs_s = u->disk ? u->disk->hdr_s : 0;   /* the host's pop re-mounts at the image's root */
 }
 VD_COLD static void end_temp(td_unit_t *u, int ch)
 {
@@ -598,7 +619,12 @@ VD_COLD static void chan_open(tdrive_t *v, int unit, td_unit_t *u, int ch, const
         d64_entry_t e;
         int r = d64_find(u->disk, o.name, &e);
         if (r < 0) { err_from(u, r); chan_close(u, ch); return; }
-        if (r == 0) { set_err(u, 62, 0, 0); chan_close(u, ch); return; }
+        if (r == 0) {                                                          /* a .DNP sub-directory is no file: 64, as on a CMD drive */
+            uint8_t ht = u->disk->hdr_t, hs = u->disk->hdr_s;
+            int dir = !strpbrk(o.name, "*?") && d64_dir_enter(u->disk, o.name) == 0;
+            u->disk->hdr_t = ht; u->disk->hdr_s = hs;
+            set_err(u, dir ? 64 : 62, 0, 0); chan_close(u, ch); return;
+        }
         d64_file_open(u->disk, &e, &c->u.r);
         c->mode = 1;
     } else if (mode == 'A') {                                                  /* ",A": more data at the end of an existing file */
@@ -635,7 +661,7 @@ VD_COLD static void cmd_cd(tdrive_t *v, int unit, td_unit_t *u, const char *p, c
     char *rest;
     int r = path_walk(v, unit, u, path, &rest);
     if (r) set_err(u, (uint8_t)r, 0, 0);
-    else if (*rest) set_err(u, 33, 0, 0);                        /* something after the image / a wildcard: not a directory */
+    else if (*rest) set_err(u, is_dnp(u) && !strpbrk(rest, "*?") ? 39 : 33, 0, 0);   /* something after the image / a wildcard (.DNP: no such directory) */
 }
 
 /* "N:[path/]NAME.D64[,ID]" (.D71, .D81) with nothing mounted: a new blank image in the current folder (or the folder the path
@@ -657,6 +683,7 @@ VD_COLD static void cmd_new_image(tdrive_t *v, int unit, td_unit_t *u, const cha
     char *leaf = strrchr(path, '/');
     int kind = image_kind(path);
     if (!kind || strpbrk(path, "*?")) { set_err(u, 33, 0, 0); return; }
+    if (kind == 1) { set_err(u, 31, 0, 0); return; }              /* a new .DNP: no formatter for CMD native partitions yet */
     if (leaf) {                                                   /* the folders first, then the new file in the last one */
         char *rest, root[2] = { '/', 0 };
         *leaf++ = 0;

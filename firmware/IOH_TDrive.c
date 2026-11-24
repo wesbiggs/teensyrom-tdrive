@@ -5,7 +5,7 @@
 //   unit 0 = SD card, unit 1 = USB drive. Device numbers are automatic by default: the first free numbers from 8 up
 //   (the KERNAL probes the real serial bus on the first disk access of a run, see tdrive_io.h), so 8 (SD) and 9 (USB) when
 //   no other drive is attached. A number can be fixed from BASIC with  OPEN15,8,15,"U0>"+CHR$(10):CLOSE15  (this drive becomes
-//   device 10, kept in EEPROM; CHR$(0) makes it automatic again). Each unit serves a mounted .d64 / .d71 / .d81 (or lists the host
+//   device 10, kept in EEPROM; CHR$(0) makes it automatic again). Each unit serves a mounted .d64 / .d71 / .d81 / .dnp (or lists the host
 //   directory so one can be picked with  OPEN15,8,15,"CD:GAME.D64"  /  "CD:_" to unmount, or  LOAD"$/GAMES/GAME.D64",8).
 // Uses the KERNAL bus hook from IOH_KernalReplace.c with its own image (TD_KernalImage below: /TDrive/kernal.bin on the SD card, else
 // the C64's own KERNAL patched in memory; the <Shift-K> file stays the plain Kernal Replace's) and adds the IO1/IO2 mailbox the
@@ -313,6 +313,13 @@ FLASHMEM static void TD_Unmount(void *ctx, int unit)
    TD_SidecarClear(u);                                   // an explicit unmount forgets the image (a new mount re-writes it)
 }
 
+// A .dnp (CMD native partition) is known by its name, never by its size: a 3-track one is as long as a 40-track .d64.
+FLASHMEM static bool TD_IsDnp(const char *path)
+{
+   size_t n = strlen(path);
+   return n >= 4 && path[n - 4] == '.' && (path[n - 3] | 0x20) == 'd' && (path[n - 2] | 0x20) == 'n' && (path[n - 1] | 0x20) == 'p';
+}
+
 // Mount the image at path (host spelling); imgName keeps its host name.
 FLASHMEM static int TD_MountHost(int unit, const char *path, d64_t **out)
 {
@@ -327,11 +334,13 @@ FLASHMEM static int TD_MountHost(int unit, const char *path, d64_t **out)
    if (!probe || probe.isDirectory()) { if (probe) probe.close(); return 62; }   // FILE NOT FOUND
    uint32_t size = probe.size();
    probe.close();
-   if (size < 174848) return 74;                                                  // DRIVE NOT READY: not a D64
+   const bool dnp = TD_IsDnp(leaf);
+   if (dnp ? (size == 0 || size % 65536 || size > 255u * 65536) : size < 174848) return 74;   // DRIVE NOT READY: not a disk image
    bool writable = true;
    if (!u->img.open(u->vol, path, O_RDWR))                                        // no O_CREAT: nothing is created
    { writable = false; if (!u->img.open(u->vol, path, O_RDONLY)) return 62; }
-   if (d64_open_size(&u->d, TD_ReadSector, u, size)) { u->img.close(); return 74; }   // format (d64 / d71 / d81) comes from the size
+   if (dnp ? d64_open_dnp(&u->d, TD_ReadSector, u, size)                          // .dnp by name (read-only in the engine for now),
+           : d64_open_size(&u->d, TD_ReadSector, u, size)) { u->img.close(); return 74; }   // d64 / d71 / d81 from the size
    u->d.write = writable ? TD_WriteSector : NULL;
    TD_LoadErrTab(u, size);
    u->mounted = true; ImageWriteBackForget(&u->wb);
@@ -1256,12 +1265,14 @@ FLASHMEM int TDrive_RemoteQuiet(char *msg, size_t cap)
    return 0;
 }
 
-// 0 = a readable file of at least D64 size; else 62 (not found) / 74 (not a disk image), reason in msg.
+// 0 = a readable file of at least D64 size (a .dnp: a multiple of 64 KB, up to 255 tracks); else 62 (not found) / 74 (not a disk
+// image), reason in msg.
 FLASHMEM static int TD_CheckImage(FS *fs, const char *path, char *msg, size_t cap)
 {
    File probe = fs->open(path, FILE_READ);
    if (!probe) { snprintf(msg, cap, "file not found"); return 62; }
-   bool bad = probe.isDirectory() || probe.size() < 174848;
+   bool bad = probe.isDirectory();
+   if (!bad) { uint32_t size = probe.size(); bad = TD_IsDnp(path) ? size == 0 || size % 65536 || size > 255u * 65536 : size < 174848; }
    probe.close();
    if (bad) { snprintf(msg, cap, "not a disk image"); return 74; }
    return 0;

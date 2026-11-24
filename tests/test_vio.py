@@ -436,7 +436,9 @@ class HostTests(unittest.TestCase):
         def mount(ctx, unit, name, out):
             p = self.cwd / name.decode().lower()
             if not p.exists(): return 62
-            d = Disk(p.read_bytes()); self.disks[unit] = d
+            try: d = Disk(p.read_bytes(), dnp=p.suffix == ".dnp")
+            except AssertionError: return 74      # as the glue: not a disk image
+            self.disks[unit] = d
             out[0] = ctypes.addressof(d.d)
             self.cur = (d, name)
             self.mounted.append(p.name); return 0
@@ -668,6 +670,87 @@ class HostTests(unittest.TestCase):
         self.assertEqual(self.status(), "00, OK,00,00\r")
         self.assertEqual(self.created, [])
         self.assertEqual(self.cur[0].header()[:2], (b"FRESH.D64", b"ZZ"))
+
+    # ---- .DNP, CMD native partitions (docs/DESIGN.md 66) ----
+    def with_dnp(self):
+        from dnp import sample
+        (self.tmp / "cmd.dnp").write_bytes(sample().bytes())
+
+    def dir_title(self):
+        rc, _, lst = self.io.fast_load(8, b"$")
+        self.assertEqual(rc, 0)
+        return lst[lst.index(b'"') + 1: lst.index(b'"', lst.index(b'"') + 1)].rstrip(), lst
+
+    def test_dnp_sub_directories_with_cd(self):
+        self.with_dnp()
+        self.cmd15(b"CD:CMD.DNP"); self.assertEqual(self.status(), "00, OK,00,00\r")
+        title, lst = self.dir_title()
+        self.assertEqual(title, b"CMDNATIVE")
+        self.assertIn(b'"GAMES"            DIR ', lst)
+        self.assertIn(b"BLOCKS FREE", lst)
+        self.assertEqual(self.io.fast_load(8, b"HELLO")[1:], (0x0801, b"ROOT FILE" + bytes(300)))
+        self.cmd15(b"CD:GAMES"); self.assertEqual(self.status(), "00, OK,00,00\r")
+        self.assertEqual(self.dir_title()[0], b"GAMES")
+        self.assertEqual(self.io.fast_load(8, b"INGAMES")[1:], (0xC000, b"in games"))
+        self.cmd15(b"CD/DEEP"); self.assertEqual(self.status(), "00, OK,00,00\r")      # the CMD form
+        self.assertEqual(self.dir_title()[0], b"DEEP")
+        self.assertEqual(self.io.fast_load(8, b"BOTTOM")[1:], (0xC000, bytes(range(256)) * 4))
+        self.cmd15(b"CD:.."); self.status()
+        self.assertEqual(self.dir_title()[0], b"GAMES")
+        self.cmd15(b"CD:_"); self.status()
+        self.assertEqual(self.dir_title()[0], b"CMDNATIVE")
+        self.assertEqual(self.unmounted, [])
+        self.cmd15(b"CD:_"); self.assertEqual(self.status(), "00, OK,00,00\r")       # up from the image's root: out of it
+        self.assertIsNone(self.cur)
+        self.assertEqual(self.cwd, self.tmp)
+
+    def test_dnp_paths(self):
+        self.with_dnp()
+        self.assertEqual(self.io.fast_load(8, b"/CMD.DNP/GAMES/DEEP/BOTTOM")[1], 0xC000)   # from the card into the image
+        self.assertEqual(self.dir_title()[0], b"DEEP")                                    # a file through a path: it stays selected
+        self.cmd15(b"CD:/"); self.status()
+        title, lst = self.dir_title()
+        self.assertEqual(title, b"SD CARD")
+        self.assertIn(b'"CMD.DNP"          DNP', lst)                                    # the card's listing names the kind
+        rc, _, lst = self.io.fast_load(8, b"$/CMD.DNP/GAMES/")                           # a listing by path only shows it
+        self.assertEqual(rc, 0); self.assertIn(b'"GAMES', lst); self.assertIn(b'"INGAMES"', lst)
+        self.assertIsNone(self.cur)
+        self.cmd15(b"CD:CMD.DNP"); self.cmd15(b"CD:GAMES"); self.status()
+        rc, _, lst = self.io.fast_load(8, b"$DEEP/")
+        self.assertIn(b'"BOTTOM"', lst)
+        self.assertEqual(self.dir_title()[0], b"GAMES")                                   # back in GAMES, not the root
+        self.assertEqual(self.io.fast_load(8, b"DEEP/BOTTOM")[1], 0xC000)                 # relative
+        self.assertEqual(self.dir_title()[0], b"DEEP")
+        self.cmd15(b"CD:_"); self.cmd15(b"CD:_"); self.status()
+        self.assertEqual(self.io.fast_load(8, b"/GAMES/:INGAMES")[1:], (0xC000, b"in games"))   # a CMD path
+        self.assertEqual(self.dir_title()[0], b"GAMES")
+        self.cmd15(b"CD:_"); self.status()
+        rc, _, lst = self.io.fast_load(8, b"$GAMES/IN*")
+        self.assertIn(b'"INGAMES"', lst); self.assertNotIn(b'"DEEP"', lst)
+
+    def test_dnp_errors_and_read_only(self):
+        self.with_dnp()
+        self.cmd15(b"N:NEW.DNP,AB"); self.assertTrue(self.status().startswith("31,"))   # no formatter for native partitions
+        self.assertFalse((self.tmp / "new.dnp").exists())
+        (self.tmp / "odd.dnp").write_bytes(bytes(65536 + 256))
+        self.cmd15(b"CD:ODD.DNP"); self.assertEqual(self.status(), "74,DRIVE NOT READY,00,00\r")
+        self.cmd15(b"CD:CMD.DNP"); self.status()
+        self.cmd15(b"CD:NOPE"); self.assertEqual(self.status(), "39,FILE NOT FOUND,00,00\r")
+        self.cmd15(b"CD:NOPE/DEEP"); self.assertEqual(self.status(), "39,FILE NOT FOUND,00,00\r")
+        self.assertEqual(self.dir_title()[0], b"CMDNATIVE")
+        self.assertEqual(self.io.fast_load(8, b"NOPE/HELLO")[0], 4)
+        self.assertEqual(self.status(), "39,FILE NOT FOUND,00,00\r")
+        self.assertEqual(self.io.fast_load(8, b"GAMES")[0], 4)                           # a directory is no file
+        self.assertEqual(self.status(), "64,FILE TYPE MISMATCH,00,00\r")
+        self.assertEqual(self.io.fast_load(8, b"NOPE")[0], 4)
+        self.assertEqual(self.status(), "62,FILE NOT FOUND,00,00\r")
+        self.assertEqual(self.io.fast_load(8, b"*")[1:], (0x0801, b"ROOT FILE" + bytes(300)))   # "*": the first file, not GAMES
+        before = (self.tmp / "cmd.dnp").read_bytes()
+        self.io.fast_save(8, b"NEW", 0x0801, b"x")
+        self.assertEqual(self.status(), "26,WRITE PROTECT ON,00,00\r")
+        self.cmd15(b"S:HELLO"); self.assertTrue(self.status().startswith("26,"))
+        self.cmd15(b"MD:X"); self.assertTrue(self.status().startswith("31,"))
+        self.assertEqual(self.cur[0].dump(), before)
 
     def cmd15(self, text):
         self.io.call(LISTEN, 8); self.io.call(SECOND, 0x6F)

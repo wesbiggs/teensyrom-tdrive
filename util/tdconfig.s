@@ -2145,7 +2145,7 @@ edval:  ldy #0
         rts
 
 ; ---------------------------------------------------------------------------------------------------------------------------------
-; The browser: folders and .D64/.D71/.D81 of the shown unit, from "$/folder/" listings (a listing by path leaves the mount alone).
+; The browser: folders and .D64/.D71/.D81/.DNP of the shown unit, from "$/folder/" listings (a listing by path leaves the mount alone).
 ; RETURN opens a folder (".." goes up) or picks an image: BR = 1 and PATHB / PATHBL its path. Left arrow: BR = 0.
 browse: lda #'/'
         sta BP
@@ -2380,7 +2380,7 @@ blist:  lda #0
         lda #1
         jmp CLOSE
 
-; one listing line in LINE/LLEN: the name between the first two quotes (trailing spaces off), kept when the type after it is DIR/D64/D71/D81
+; one listing line in LINE/LLEN: the name between the first two quotes (trailing spaces off), kept when the type after it is DIR/D64/D71/D81/DNP
 bentry: ldy LLEN
         lda #0
         sta LINE,y
@@ -2436,7 +2436,7 @@ bentry: ldy LLEN
         inx
         inx
         inx
-        cpx #12
+        cpx #15
         bcc @tc
 @no:    rts
 @hit:   lda BK
@@ -2466,7 +2466,7 @@ bentry: ldy LLEN
 @d:     inc BK
         rts
 
-types:  .byte "DIRD64D71D81"
+types:  .byte "DIRD64D71D81DNP"
 
 ; the browser screen: row 3 the folder, 4-19 the entries, 21 the keys
 bdraw:  ldx #3

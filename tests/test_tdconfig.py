@@ -67,7 +67,7 @@ class FakeDrive:
         for name, v in self.children(u, folder):
             n = name.upper()
             if len(n) > 16: continue
-            kind = "DIR" if v is None else (n[-3:] if n[-4:-3] == "." and n[-3:] in ("D64", "D71", "D81") else "PRG")
+            kind = "DIR" if v is None else (n[-3:] if n[-4:-3] == "." and n[-3:] in ("D64", "D71", "D81", "DNP") else "PRG")
             blocks = 0 if v is None else (len(v) + 253) // 254
             out += self.bas_line(blocks, b" " * (3 if blocks < 10 else 2 if blocks < 100 else 1 if blocks < 1000 else 0) + b'"' + n.encode() + b'"' + b" " * (16 - len(n)) + b" " + kind.encode() + b" ")
         out += self.bas_line(0, b"BLOCKS FREE.             ")
@@ -371,6 +371,18 @@ class T(unittest.TestCase):
         self.assertEqual(self.drive.units[8].mounted, "/big.d81")
         self.assertEqual(self.row(1), "SD  8: /big.d81"); self.assertEqual(self.row(20), "Mounted")
         self.assertEqual(self.config(), CONFIG, "mounting from the browser does not touch the list")
+
+    def test_browse_shows_and_mounts_a_dnp(self):
+        """a CMD native partition (docs/DESIGN.md 66) is an image to the browser too"""
+        sd = make_sd(); sd["/cmd.dnp"] = IMG
+        self.start(sd=sd)
+        self.keys("b")
+        names = [self.row(r) for r in range(4, 14)]
+        k = next(i for i, n in enumerate(names) if "cmd.dnp" in n)
+        self.assertIn("DNP", names[k])
+        self.keys(*([DOWN] * k), RET)
+        self.assertEqual(self.drive.units[8].mounted, "/cmd.dnp")
+        self.assertEqual(self.row(1), "SD  8: /cmd.dnp"); self.assertEqual(self.row(20), "Mounted")
 
     # ---- the browser's listings in 128-byte blocks (FLOAD_OPEN / FLOAD_BLK), OPEN + CHRIN when those are not answered ----
     def browse_screens(self, sd=None, fast=True, path=()):
