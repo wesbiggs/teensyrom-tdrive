@@ -82,9 +82,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # c1541 and petcat (Ubuntu's vice package; no ROMs needed for these), ca65/ld65 for TDSUITE's machine code and the utilities
-      - name: Install VICE tools and cc65
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq vice cc65
+      # c1541 and petcat (Ubuntu's vice package; no ROMs needed for these), ca65/ld65 for TDSUITE's machine code and TDCOPY, acme for TDrive Config
+      - name: Install VICE tools, cc65 and ACME
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq vice cc65 acme
 
       - name: Build the test disk and the card files
         run: |

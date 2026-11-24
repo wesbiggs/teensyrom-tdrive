@@ -343,7 +343,7 @@ T switch SD / USB list   R refresh   Q back to the TeensyROM menu   (left arrow 
 The top lines show the image mounted on each drive; `*` marks the list entry that is mounted. Changes to the list are saved immediately in `tdrive-config.txt`. Details: `docs/DESIGN.md` section 23.
 
 ## Building and testing
-Needs `cc65` (`ca65`/`ld65`), VICE (`x64sc`, `c1541`), a C/C++ compiler and Python 3; ACME 0.97 for the menu's bus probe test (and, with
+Needs `cc65` (`ca65`/`ld65`), VICE (`x64sc`, `c1541`), a C/C++ compiler and Python 3; ACME 0.97 for TDrive Config (`make util`, its test and the test disk) and the menu's bus probe test (and, with
 node, for `tools/make_tr_patch.sh`).
 
 ```bash

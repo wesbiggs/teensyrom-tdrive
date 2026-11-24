@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.9.0.78
+
+### Fixed
+- **Only `.d64`, `.d71` and `.d81` files mount.** A remote set (`trvdrive`), an Alt-button list entry or a remembered mount naming any
+  other file of 174848 bytes or more mounted it as a disk (the format comes from the size): a 1 MB `.crt` became a writable D81, and a
+  `SAVE` or `N:` from the C64 wrote into the cartridge file. Such a mount is now refused before the current disk is unmounted; the remote
+  set answers "not a disk image". Since remembered mounts (0.9.0.3), remote set (0.9.0.8) and the Alt button (0.9.0.17). Found in a code
+  review of the patched tree. Host tests; **not on hardware**. `docs/DESIGN.md` section 66.
+- **A LOAD or SAVE keeps working when the drive's number changes under it** (a `U0>` on the command channel, or the automatic bus scan,
+  while a fast LOAD or SAVE is open). The SAVE left its file unfinished and the channel open; the LOAD's blocks came back empty and never
+  ended. The transfer now stays on its drive whatever number it answers to. Every version with `U0>` or the bus scan had it. Host tests
+  (`tests/test_vio.py`, the tree's `tdrive-io.test.js`); **not on hardware**.
+- **DMA builds: a VERIFY of a large card file no longer stalls the TeensyROM.** With nothing mounted, the fast VERIFY read the whole file
+  to measure it before deciding it did not fit in RAM (a 4 MB file: 4 MB read while ASID, TCP and remote commands waited). It stops at
+  the first byte past `$CFFF` now. Since DMA VERIFY (0.9.0.57). Host tests; **not on hardware**.
+- **TDrive+REU and TDrive+Swift+REU: an immediate REU command now cancels a pending `$FF00` trigger**, as on the plain REU. Before, the
+  program's next store to `$FF00` started a second transfer nobody asked for, over C64 or REU memory. Since TDrive+Swift+REU (0.9.0.28).
+  Host tests (the tree's `tdrive-reu.test.js`); **not on hardware**.
+
+### Changed
+- TDrive Config's prompt for a list colour reads "Color 0-15:" (was "Colour").
+
+### Build
+- **TDrive Config is built from source inside the TeensyROM tree.** Its source is now ACME (`util/tdconfig.asm`, replacing the ca65
+  `util/tdconfig.s`; the same bytes but for the prompt), the assembler of the other menu programs; the patch adds it as the C64 project
+  `TDriveConfig` and the tree's own tool builds `tdconfig.prg.h` (made here before), so the tree's tests check the header
+  against the source. `make util`, `make test-tdconfig` and `make testdisk` now need ACME 0.97 (as `make test-menuprobe` did).
+- The patch also adds the review's host tests of the TDrive engine and handlers to the tree's `npm test` and documents the remote
+  get / set commands in the tree's `docs/ControlComms.md`. All of this came from the code review on the fork's `tdrive-panel` branch.
+
 ## v0.9.0.77
 
 ### Changed
