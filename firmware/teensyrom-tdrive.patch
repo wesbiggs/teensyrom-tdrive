@@ -200,7 +200,7 @@ index 5c20eda..d1928c4 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 91aca90..ab97b30 100644
+index 91aca90..f9de28e 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -222,7 +222,7 @@ index 91aca90..ab97b30 100644
  
  
 -#define TRVersion              "0.9.0.1"    //*VERSION*
-+#define TRVersion              "0.9.0.1.75"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 75)
++#define TRVersion              "0.9.0.1.76"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 76)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
@@ -365,10 +365,10 @@ index 5ba190e..4f0a9b6 100644
              TxMsgOffset = 0;
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
 new file mode 100644
-index 0000000..4b1c12c
+index 0000000..2f47e8b
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
-@@ -0,0 +1,1894 @@
+@@ -0,0 +1,1895 @@
 +// The TDrive Special IOs: the virtual IEC drive and its SD / USB glue. On the TeensyROM+ (Fab04_TDrive) "TDrive KERNAL" and its
 +// combined handlers serve a replacement KERNAL; on both boards (TDrive_Agent) IOH_TDriveAgent.c reaches the same drive through the
 +// KERNAL's RAM vectors and a 6502 agent (docs/DESIGN.md 53). The KERNAL-only parts are under Fab04_TDrive.
@@ -1123,6 +1123,7 @@ index 0000000..4b1c12c
 +   bool (*snoop)(uint16_t, bool) = fBusSnoop;
 +   if (snoop == NULL || snoop == &tdCloseSnoop) return CloseDMA();
 +   tdSnoopHeld = snoop;
++   __asm__ volatile("" ::: "memory");   // tdCloseSnoop calls through tdSnoopHeld as soon as fBusSnoop points at it
 +   fBusSnoop = &tdCloseSnoop;
 +   bool ok = CloseDMA();
 +   if (fBusSnoop == &tdCloseSnoop) fBusSnoop = snoop;   // (the ISR does not change it while the CPU is held)

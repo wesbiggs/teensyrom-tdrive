@@ -752,6 +752,7 @@ FLASHMEM static bool TD_CloseDMA()
    bool (*snoop)(uint16_t, bool) = fBusSnoop;
    if (snoop == NULL || snoop == &tdCloseSnoop) return CloseDMA();
    tdSnoopHeld = snoop;
+   __asm__ volatile("" ::: "memory");   // tdCloseSnoop calls through tdSnoopHeld as soon as fBusSnoop points at it
    fBusSnoop = &tdCloseSnoop;
    bool ok = CloseDMA();
    if (fBusSnoop == &tdCloseSnoop) fBusSnoop = snoop;   // (the ISR does not change it while the CPU is held)

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.0.76
+
+### Fixed
+- **A DMA release could crash the TeensyROM+, most likely on the first one after power-on.** The drive's DMA LOAD, SAVE and VERIFY
+  parts and the Alt button's border flash hold the Kernal Replace check off while the DMA line is released (0.9.0.73): they save the
+  check, then point the bus hook at a stand-in that calls it. The compiler was free to store those two the other way round, and does,
+  so a bus cycle between the two stores ran the stand-in with no check saved yet (a hard fault and a reboot) or with the one from the
+  previous release. The saved check is now stored first; the fix adds no instructions. The TeensyROM maintainer found the same gap in
+  the upstream version of this fix (TeensyROM PR #106). Every TR+ build since 0.9.0.73 had it. Host build only: the glue compiles
+  against the host stubs, and the ARM compiler's output shows the two stores in order; **not on hardware**. `docs/DESIGN.md` section 62.
+
 ## v0.9.0.75
 
 ### Changed
@@ -57,7 +68,8 @@
   Only VIC badlines and sprite fetches let a cycle through, so with the display off the release gave up after 100 ms and the load
   failed. The drive now holds the check off until the release, for DMA LOAD, SAVE and VERIFY and for the Alt button's border flash.
   Every DMA build since DMA LOAD (0.9.0.52) had the bug. **Works on hardware (owner, 2026-11-16, C128 in C64 mode): the game's
-  loads work, a 2 KB part takes 2.3 ms, the Alt-button flash works.** Host test. `docs/DESIGN.md` section 62.
+  loads work, a 2 KB part takes 2.3 ms, the Alt-button flash works.** Host test. `docs/DESIGN.md` section 62. This fix left a gap
+  between two stores that a bus cycle could land in, closed in 0.9.0.76.
 
 ### Added
 - **More counters in the remote get's `"dbg"` JSON** (`trlib`'s `vdrive_get()`; `trvdrive` does not print them): `dma` (DMAs, failed

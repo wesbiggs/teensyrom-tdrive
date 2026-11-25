@@ -1351,7 +1351,11 @@ Same family as the start-side note in section 60: the safe-freeze states are als
 **Fix, in the glue (upstream's ISR untouched):** `TD_CloseDMA()` (`IOH_TDrive.c`) swaps `fBusSnoop` for `tdCloseSnoop` (`FASTRUN`)
 around `CloseDMA()`: it returns false while `DMA_State == DMA_S_StartDisable` and otherwise calls the saved check, so the release
 comes on the next cycle and the CPU's first cycle after it is served as before; the pointer goes back when `CloseDMA()` returns (the
-wrapper costs one test on the few cycles in between). Used by the DMA LOAD/SAVE/VERIFY transfers (`TD_DmaDo`) and the border flash;
+wrapper costs one test on the few cycles in between). Since 0.9.0.76 a compiler barrier sits between the store to `tdSnoopHeld` and
+the one to `fBusSnoop`: both are plain globals and GCC stored `fBusSnoop` first, so a cycle in between ran `tdCloseSnoop` through a
+`tdSnoopHeld` still NULL (the first close after boot: a hard fault) or left from the previous close. The core sees its own stores in
+program order, so the ISR needs neither a `DMB` nor an interrupt mask (the TeensyROM maintainer's review of the same wrapper, PR #106).
+Used by the DMA LOAD/SAVE/VERIFY transfers (`TD_DmaDo`) and the border flash;
 not the PreStart KERNAL read (no snoop hooked then) or the agent (none hooked). Changing the ISR's order would fix it for every DMA
 user (upstream's remote DMA under Kernal Replace with a blank screen is exposed too), but the 0.9.0.67 ISR edit broke Exit to C128
 BASIC; a candidate for an upstream issue.
