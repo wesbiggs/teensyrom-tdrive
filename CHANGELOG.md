@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.0.77
+
+### Changed
+- **The DMA release now uses TeensyROM's own fix.** The maintainer merged the upstream version of 0.9.0.73's release fix (TeensyROM
+  PR #106): `CloseDMA()` itself holds the Kernal Replace check off until the DMA line is released, with 0.9.0.76's store order. The
+  drive's DMA LOAD, SAVE and VERIFY parts and the border flash now call it directly, and TDrive's own stand-in (`TD_CloseDMA()`,
+  `tdCloseSnoop`) is gone. Upstream swaps the check only when the DMA line is known to be held, so a border flash whose transfer timed
+  out releases without it, as upstream's other callers do. `docs/DESIGN.md` section 62.
+
+### Build
+- Built on the fork's `tdrive-base` rebased on upstream `823d92f4` (`firmware/UPSTREAM` `e6e0df8f`; `TRVersion` still `0.9.0.1`, so
+  this build is `0.9.0.1.77`). Also inherited from upstream: interrupt-masked code runs from ITCM and the firmware build fails on a mask
+  in flash (#115), USB controller register accesses kept inside the Phi2 window, asynchronous DMA starts on BA as the read cycle saw
+  it, the snoop tap, and bench tools. `tdrive-base` now also carries the shared engine's read-only `.dnp` (CMD native partition) support,
+  so `d64/d64.c` and `d64/d64.h` are copied from it again; D64/D71/D81 behave as before. The patch's edits to upstream files all still
+  apply unchanged. Host checks only (the glue builds against the host stubs with clang, the engine builds as C and C++, upstream's
+  `npm test`); **not on hardware**.
+
 ## v0.9.0.76
 
 ### Fixed

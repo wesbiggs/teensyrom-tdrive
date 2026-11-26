@@ -734,31 +734,9 @@ FLASHMEM static void TD_ProbeBegin();
 void TD_BannerUnits(uint8_t *img, int size, bool settled);   // below
 void TD_BannerRegs(bool on, bool settled);
 
-// CloseDMA with the bus snoop held off until the release. isrPHI2 handles DMA_S_StartDisable only after fBusSnoop has declined the
-// cycle, and while /DMA is held nobody drives the address bus: it reads as a CPU read of $E000-$FFFF (R/W pulled up), which
-// KernalCheck takes every time. Only a cycle with BA low (a badline, a sprite fetch) got through, so with the screen blanked and the
-// sprites off the release never came: CloseDMA gave up after 2 x 50 ms, dropped /DMA unsynchronised and the LOAD failed with
-// DEVICE NOT PRESENT (q4k's loads, owner, C128 in C64 mode, 2026-11-16; docs/DESIGN.md 62). tdCloseSnoop declines every cycle while the
-// release is pending and hands the rest to the hooked check, so the first CPU cycle after the release is served as before.
-#ifdef Fab04_TDrive                // the KERNAL handlers (TR+ only, so DMA-capable) hook a check; the agent has none
-static bool (*tdSnoopHeld)(uint16_t, bool) = NULL;
-FASTRUN static bool tdCloseSnoop(uint16_t Address, bool R_Wn)
-{
-   if (DMA_State == DMA_S_StartDisable) return false;
-   return tdSnoopHeld(Address, R_Wn);
-}
-FLASHMEM static bool TD_CloseDMA()
-{
-   bool (*snoop)(uint16_t, bool) = fBusSnoop;
-   if (snoop == NULL || snoop == &tdCloseSnoop) return CloseDMA();
-   tdSnoopHeld = snoop;
-   __asm__ volatile("" ::: "memory");   // tdCloseSnoop calls through tdSnoopHeld as soon as fBusSnoop points at it
-   fBusSnoop = &tdCloseSnoop;
-   bool ok = CloseDMA();
-   if (fBusSnoop == &tdCloseSnoop) fBusSnoop = snoop;   // (the ISR does not change it while the CPU is held)
-   return ok;
-}
-#endif
+// DMA releases go through upstream's CloseDMA() (TeensyROM #106): while the release is pending it holds the bus snoop off, so with
+// the screen blanked and the sprites off KernalCheck no longer takes every cycle and keeps the release from coming (docs/DESIGN.md 62;
+// 0.9.0.73-0.9.0.76 did the same here, in their own TD_CloseDMA()).
 
 #ifdef Fab04_TDriveDMALoad
 // Every DMA of the drive: how many, how they failed and the longest, in the remote get's "dbg" JSON ("dma"; docs/DESIGN.md 62).
@@ -770,7 +748,7 @@ FLASHMEM static int TD_DmaDo(DMA_Trans_RnW rnw, uint16_t addr, uint8_t *buf, uin
    tdDmaDbg.n++;
    bool ok = PerformDMA(rnw, addr, buf, len, DMA_ADDR_INCREMENT);
    if (!ok) tdDmaDbg.startFail++;
-   else if (!TD_CloseDMA()) { tdDmaDbg.closeFail++; ok = false; }
+   else if (!CloseDMA()) { tdDmaDbg.closeFail++; ok = false; }
    uint32_t us = micros() - t0;
    if (us > tdDmaDbg.maxUs) tdDmaDbg.maxUs = us;
    if (!ok) { tdDmaDbg.lastFailMs = millis(); tdDmaDbg.lastFailAddr = addr; }
@@ -1644,7 +1622,7 @@ FLASHMEM static bool TD_BorderDMA(uint8_t reg)
       else if (!TD_HeldDMA(DMA_WRITE, 0xD020, &color, 1)) { ok = false; tdBorderDbg.xferFail++; }
       else { tdBorderDbg.written++; TD_Trace(TDT_Write, color, false); }
    }
-   if (!TD_CloseDMA()) tdBorderDbg.closeFail++;
+   if (!CloseDMA()) tdBorderDbg.closeFail++;
    const uint32_t us = micros() - t0;
    if (us > tdBorderDbg.maxUs) tdBorderDbg.maxUs = us;
    TD_Crumb(5, tdBorderDbg.req << 16 | (tdBorderDbg.written & 0xFFFF));

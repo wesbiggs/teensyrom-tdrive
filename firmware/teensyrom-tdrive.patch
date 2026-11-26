@@ -200,7 +200,7 @@ index 5c20eda..d1928c4 100644
       rtFilePrg  , IOH_TR_BASIC     , (char*)"BASIC with TeensyROM Commands"    , (uint8_t*)TRCBC_prg                  , sizeof(TRCBC_prg) ,
       rtFileCrt  , IOH_None         , (char*)"Super Expander 64"                , (uint8_t*)super_expander_64_crt      , sizeof(super_expander_64_crt) ,
 diff --git a/Source/Teensy/MinimalBoot/Common/Common_Defs.h b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
-index 91aca90..f9de28e 100644
+index 35b095b..8a2221c 100644
 --- a/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 +++ b/Source/Teensy/MinimalBoot/Common/Common_Defs.h
 @@ -14,9 +14,13 @@
@@ -215,18 +215,18 @@ index 91aca90..f9de28e 100644
 +#define TDrive_Agent   //virtual IEC drive through the KERNAL's RAM vectors and a 6502 agent served from IO1 (no Kernal Replace)
 +#define TDrive_Any     //any TDrive Special IO: the agent, and on the TR+ the replacement-KERNAL ones (Fab04_TDrive)
  
- // The extension loader rides with the Fab 0.4 feature set: DoHostInstall blanks the screen
- // through the full DMA Fab04_FullDMACapable gates, and tools/build-firmware.mjs only turns
-@@ -38,7 +42,7 @@
+ #if defined(DbgSnoopTap) && defined(Fab04_FullDMACapable) && !defined(MinimumBuild)
+    #define SnoopTapBuild              //the snoop tap's hooks in isrPHI2 and the data port waits
+@@ -42,7 +46,7 @@
    // #define DbgSignalSenseReset
  
  
 -#define TRVersion              "0.9.0.1"    //*VERSION*
-+#define TRVersion              "0.9.0.1.76"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 76)
++#define TRVersion              "0.9.0.1.77"    //*VERSION*  (stock 0.9.0.1 + TDrive rev 77)
  // Special builds: tools/build-firmware.mjs --tag <name> defines TRVersionSuffix as "-<name>",
  // and a build with uncommitted edits to the image sources adds "*". Arduino IDE builds have
  // none. Leave TRVersion to releases: it names the hex and the browser's User-Agent.
-@@ -94,6 +98,8 @@ static_assert(sizeof(strVersionNumber) <= 41, "strVersionNumber must fit the 40-
+@@ -104,6 +108,8 @@ static_assert(sizeof(strVersionNumber) <= 41, "strVersionNumber must fit the 40-
  #define FWCheckToken      0x64E0  // Check firmware type
  #define FWMinimalToken    0x64E1  // Minimal firmware response
  #define FWFullToken       0x64E2  // Full firmware response
@@ -235,7 +235,7 @@ index 91aca90..f9de28e 100644
  
  
  #define eepMagicNum         0xfeed6415 // 01: 6/22/23  net settings added 
-@@ -145,7 +151,8 @@ enum InternalEEPROMmap
+@@ -155,7 +161,8 @@ enum InternalEEPROMmap
     eepAdMIDISettings2 = 4233, // (1:uint8_t)    MIDI Settings reg#2, see RegMIDISettingsMasks2
     eepAdPwrUpDefaults3= 4234, // (1:uint8_t)    power up default reg3, see bit mask defs RegPowerUpDefaultMasks3
     
@@ -365,10 +365,10 @@ index 5ba190e..4f0a9b6 100644
              TxMsgOffset = 0;
 diff --git a/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
 new file mode 100644
-index 0000000..2f47e8b
+index 0000000..5fcb6f7
 --- /dev/null
 +++ b/Source/Teensy/MinimalBoot/Common/IO_Handlers/IOH_TDrive.c
-@@ -0,0 +1,1895 @@
+@@ -0,0 +1,1873 @@
 +// The TDrive Special IOs: the virtual IEC drive and its SD / USB glue. On the TeensyROM+ (Fab04_TDrive) "TDrive KERNAL" and its
 +// combined handlers serve a replacement KERNAL; on both boards (TDrive_Agent) IOH_TDriveAgent.c reaches the same drive through the
 +// KERNAL's RAM vectors and a 6502 agent (docs/DESIGN.md 53). The KERNAL-only parts are under Fab04_TDrive.
@@ -1105,31 +1105,9 @@ index 0000000..2f47e8b
 +void TD_BannerUnits(uint8_t *img, int size, bool settled);   // below
 +void TD_BannerRegs(bool on, bool settled);
 +
-+// CloseDMA with the bus snoop held off until the release. isrPHI2 handles DMA_S_StartDisable only after fBusSnoop has declined the
-+// cycle, and while /DMA is held nobody drives the address bus: it reads as a CPU read of $E000-$FFFF (R/W pulled up), which
-+// KernalCheck takes every time. Only a cycle with BA low (a badline, a sprite fetch) got through, so with the screen blanked and the
-+// sprites off the release never came: CloseDMA gave up after 2 x 50 ms, dropped /DMA unsynchronised and the LOAD failed with
-+// DEVICE NOT PRESENT (q4k's loads, owner, C128 in C64 mode, 2026-11-16; docs/DESIGN.md 62). tdCloseSnoop declines every cycle while the
-+// release is pending and hands the rest to the hooked check, so the first CPU cycle after the release is served as before.
-+#ifdef Fab04_TDrive                // the KERNAL handlers (TR+ only, so DMA-capable) hook a check; the agent has none
-+static bool (*tdSnoopHeld)(uint16_t, bool) = NULL;
-+FASTRUN static bool tdCloseSnoop(uint16_t Address, bool R_Wn)
-+{
-+   if (DMA_State == DMA_S_StartDisable) return false;
-+   return tdSnoopHeld(Address, R_Wn);
-+}
-+FLASHMEM static bool TD_CloseDMA()
-+{
-+   bool (*snoop)(uint16_t, bool) = fBusSnoop;
-+   if (snoop == NULL || snoop == &tdCloseSnoop) return CloseDMA();
-+   tdSnoopHeld = snoop;
-+   __asm__ volatile("" ::: "memory");   // tdCloseSnoop calls through tdSnoopHeld as soon as fBusSnoop points at it
-+   fBusSnoop = &tdCloseSnoop;
-+   bool ok = CloseDMA();
-+   if (fBusSnoop == &tdCloseSnoop) fBusSnoop = snoop;   // (the ISR does not change it while the CPU is held)
-+   return ok;
-+}
-+#endif
++// DMA releases go through upstream's CloseDMA() (TeensyROM #106): while the release is pending it holds the bus snoop off, so with
++// the screen blanked and the sprites off KernalCheck no longer takes every cycle and keeps the release from coming (docs/DESIGN.md 62;
++// 0.9.0.73-0.9.0.76 did the same here, in their own TD_CloseDMA()).
 +
 +#ifdef Fab04_TDriveDMALoad
 +// Every DMA of the drive: how many, how they failed and the longest, in the remote get's "dbg" JSON ("dma"; docs/DESIGN.md 62).
@@ -1141,7 +1119,7 @@ index 0000000..2f47e8b
 +   tdDmaDbg.n++;
 +   bool ok = PerformDMA(rnw, addr, buf, len, DMA_ADDR_INCREMENT);
 +   if (!ok) tdDmaDbg.startFail++;
-+   else if (!TD_CloseDMA()) { tdDmaDbg.closeFail++; ok = false; }
++   else if (!CloseDMA()) { tdDmaDbg.closeFail++; ok = false; }
 +   uint32_t us = micros() - t0;
 +   if (us > tdDmaDbg.maxUs) tdDmaDbg.maxUs = us;
 +   if (!ok) { tdDmaDbg.lastFailMs = millis(); tdDmaDbg.lastFailAddr = addr; }
@@ -2015,7 +1993,7 @@ index 0000000..2f47e8b
 +      else if (!TD_HeldDMA(DMA_WRITE, 0xD020, &color, 1)) { ok = false; tdBorderDbg.xferFail++; }
 +      else { tdBorderDbg.written++; TD_Trace(TDT_Write, color, false); }
 +   }
-+   if (!TD_CloseDMA()) tdBorderDbg.closeFail++;
++   if (!CloseDMA()) tdBorderDbg.closeFail++;
 +   const uint32_t us = micros() - t0;
 +   if (us > tdBorderDbg.maxUs) tdBorderDbg.maxUs = us;
 +   TD_Crumb(5, tdBorderDbg.req << 16 | (tdBorderDbg.written & 0xFFFF));
@@ -5317,10 +5295,10 @@ index 0000000..3adc6f6
 +#endif
 +#endif
 diff --git a/Source/Teensy/SerUSBIO.ino b/Source/Teensy/SerUSBIO.ino
-index 2d205ed..2dac15b 100644
+index 4c4223f..fa71f66 100644
 --- a/Source/Teensy/SerUSBIO.ino
 +++ b/Source/Teensy/SerUSBIO.ino
-@@ -637,6 +637,12 @@ FLASHMEM void ProcessCommand()
+@@ -642,6 +642,12 @@ FLASHMEM void ProcessCommand()
        case FWCheckToken: //Check firmware type
           SendU16(FWFullToken);
           return;   
@@ -5333,7 +5311,7 @@ index 2d205ed..2dac15b 100644
     }
  
  
-@@ -646,6 +652,21 @@ FLASHMEM void ProcessCommand()
+@@ -651,6 +657,21 @@ FLASHMEM void ProcessCommand()
         TokenVal == GetDirectoryToken || TokenVal == GetDirNDJSONToken ||
         TokenVal == SendFileToken     || TokenVal == PostFileToken     ||
         TokenVal == CopyFileToken     || TokenVal == DeleteFileToken);
@@ -5355,7 +5333,7 @@ index 2d205ed..2dac15b 100644
  
     if (CurrentIOHandler != IOH_TeensyROM && !ASIDAllowed)
     {
-@@ -855,6 +876,82 @@ FLASHMEM void LaunchFile()
+@@ -860,6 +881,82 @@ FLASHMEM void LaunchFile()
     }
  }
  

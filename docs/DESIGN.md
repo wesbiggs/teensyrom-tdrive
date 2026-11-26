@@ -1360,6 +1360,13 @@ not the PreStart KERNAL read (no snoop hooked then) or the agent (none hooked). 
 user (upstream's remote DMA under Kernal Replace with a blank screen is exposed too), but the 0.9.0.67 ISR edit broke Exit to C128
 BASIC; a candidate for an upstream issue.
 
+**Since 0.9.0.77 upstream does it (TeensyROM PR #106, merged 2026-11-25).** `CloseDMA()` itself puts `CloseDMASnoop` in front of
+`fBusSnoop` until the release, with the same barrier, but only when `/DMA` is known to be held (`DMA_State` is `TransferComplete`,
+`TransferReady` or `ActiveReady`), so a close after a start that never asserted leaves a running CPU's snoop alone. `TD_CloseDMA()`,
+`tdCloseSnoop` and `tdSnoopHeld` are gone and `TD_DmaDo` and the border flash call `CloseDMA()`. Every success path reaches the
+close in one of those states (`FinishDMA` ends in `TransferComplete`, `HoldC64` in `TransferReady`); a border flash whose transfer
+timed out (still `TransferExecuting`) now closes without the stand-in, as upstream's own callers do.
+
 **Counters kept** (main loop only), in the remote get's `"dbg"` beside `brd`:
 - `dma`: DMAs, `PerformDMA` failed, `CloseDMA` failed, longest µs, ms of the last failure (since the handler started), its C64 address.
 - `ld`: `FLOAD_OPEN`s, answered not mine, answered 5 (no device), `FLOAD_DMA`/`FLOAD_BLK` answered not mine.
