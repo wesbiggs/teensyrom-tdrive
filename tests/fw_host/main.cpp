@@ -42,6 +42,7 @@ bool PerformDMA(DMA_Trans_RnW RnW, uint16_t StartAddr, uint8_t *Buffer, uint32_t
     if (RnW == DMA_WRITE) {
         if (g_dma_wfail || FixC64Addr != DMA_ADDR_INCREMENT || StartAddr + Length > 0x10000) return false;
         memcpy(g_c64_ram + StartAddr, Buffer, Length); g_dma_writes++;
+        DMA_State.v = DMA_S_TransferComplete;   // as FinishDMA leaves it
         return true;
     }
     if (StartAddr < 0xE000) {                         // DMA SAVE / VERIFY (VIO_FSAVE_DMA, VIO_FVERIFY_OPEN): never the KERNAL's range
@@ -51,15 +52,15 @@ bool PerformDMA(DMA_Trans_RnW RnW, uint16_t StartAddr, uint8_t *Buffer, uint32_t
     }
     if (g_dma_fail || FixC64Addr != DMA_ADDR_INCREMENT || StartAddr + Length > 0x10000) return false;
     memcpy(Buffer, g_c64_kernal + (StartAddr - 0xE000), Length); g_dma_reads++;
+    DMA_State.v = DMA_S_TransferComplete;
     return true;
 }
-// CloseDMA as isrPHI2 does it: the release (DMA_S_StartDisable) is handled only on a cycle fBusSnoop declines. g_blank_bus: every
-// held cycle reads as a CPU read of $FFFF (the floating bus, no badline), which KernalCheck takes; 100 cycles stand for the ceilings.
+// The release as isrPHI2 does it: DMA_S_StartDisable is handled only on a cycle fBusSnoop declines. g_blank_bus: every held cycle
+// reads as a CPU read of $FFFF (the floating bus, no badline), which KernalCheck takes; 100 cycles stand for the ceilings.
 bool g_blank_bus = false; int g_close_fail = 0;
 static bool g_kc_takes_kernal = false;
-bool CloseDMA()
+static bool StubRelease()
 {
-    DMA_State = DMA_S_StartDisable;
     for (int i = 0; i < 100; i++) {
         if (fBusSnoop && fBusSnoop(g_blank_bus ? 0xFFFF : 0x0000, true)) continue;
         DMA_State = DMA_S_DisableReady;
@@ -67,6 +68,26 @@ bool CloseDMA()
     }
     DMA_State = DMA_S_DisableReady; g_close_fail++;
     return false;
+}
+// CloseDMA before TeensyROM #106: the blank-screen check below shows that this one fails there
+[[maybe_unused]] static bool CloseDMA_pre106() { DMA_State = DMA_S_StartDisable; return StubRelease(); }
+// CloseDMA since #106 (DMAControl.c): while the release is pending a stand-in declines the cycle, only when /DMA is known held
+static bool (*g_close_held)(uint16_t, bool) = NULL;
+static bool StubCloseSnoop(uint16_t Address, bool R_Wn)
+{
+    if (DMA_State == DMA_S_StartDisable) return false;
+    return g_close_held(Address, R_Wn);
+}
+bool CloseDMA()
+{
+    bool (*held)(uint16_t, bool) = fBusSnoop;
+    const int st = DMA_State;
+    const bool swap = (st == DMA_S_TransferComplete || st == DMA_S_TransferReady) && held != NULL && held != &StubCloseSnoop;
+    if (swap) { g_close_held = held; fBusSnoop = &StubCloseSnoop; }
+    DMA_State = DMA_S_StartDisable;
+    const bool ok = StubRelease();
+    if (swap && fBusSnoop == &StubCloseSnoop) fBusSnoop = held;
+    return ok;
 }
 // held transfers (the Alt button's border flash): $D020-$D02E behave like the VIC's colour registers (the top nibble reads back set)
 DmaStateStub DMA_State;
@@ -566,7 +587,7 @@ int main(int argc, char **argv)
             check("DMA LOAD with a blank screen: the release is not held up by KernalCheck",
                   rc == 0 && e == 0x0801 + 5000 && g_close_fail == 0 && memcmp(g_c64_ram + 0x0801, big.data(), big.size()) == 0);
             check("... and KernalCheck is hooked again afterwards", fBusSnoop == &KernalCheck);
-            check("... the stub does fail a plain CloseDMA there (the test can see the bug)", !CloseDMA() && g_close_fail == 1);
+            check("... the stub's CloseDMA before #106 fails there (the test can see the bug)", !CloseDMA_pre106() && g_close_fail == 1);
             g_kc_takes_kernal = false; g_blank_bus = false; fBusSnoop = was;
         }
         g_dma_wfail = true;
